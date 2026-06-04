@@ -5,7 +5,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -38,7 +41,7 @@ func main() {
 	fmt.Printf("[*] Starting Peer-to-Peer node as \"%s\"...\n", config.Nickname)
 
 	// 1. Create the libp2p host
-	h, err := makeHost(config.ListenPort)
+	h, err := makeHost(config.ListenPort, config.AnnounceIPs)
 	if err != nil {
 		log.Fatalln("[!] Failed to create libp2p host:", err)
 	}
@@ -114,6 +117,7 @@ type Config struct {
 	RendezvousString string
 	EnableMDNS       bool
 	BootstrapPeers   []string
+	AnnounceIPs      []string
 }
 
 func parseFlags() *Config {
@@ -122,6 +126,7 @@ func parseFlags() *Config {
 	rendezvous := flag.String("room", "chat-with-rendezvous", "rendezvous string for peer discovery")
 	useMdns := flag.Bool("mdns", true, "enable local mDNS peer discovery")
 	bootstrapRaw := flag.String("bootstrap", "", "comma-separated list of multiaddresses for bootstraps")
+	announceRaw := flag.String("announce", "", "comma-separated list of IP addresses or multiaddresses to announce manually")
 
 	flag.Parse()
 
@@ -136,17 +141,74 @@ func parseFlags() *Config {
 		bootstraps = strings.Split(*bootstrapRaw, ",")
 	}
 
+	var announceIPs []string
+	if *announceRaw != "" {
+		announceIPs = strings.Split(*announceRaw, ",")
+	}
+
 	return &Config{
 		ListenPort:       *port,
 		Nickname:         *nick,
 		RendezvousString: *rendezvous,
 		EnableMDNS:       *useMdns,
 		BootstrapPeers:   bootstraps,
+		AnnounceIPs:      announceIPs,
 	}
 }
 
+// Helper to automatically query outbound local and public IPs without calling netlink InterfaceAddrs (which fails on Android/Termux)
+func getAutoIPs() []string {
+	var ips []string
+
+	// 1. Get the local interface IP through a UDP dial (this doesn't send packets, just asks routing table for outbound interface IP)
+	conn, err := net.Dial("udp", "1.1.1.1:80")
+	if err == nil {
+		if localAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+			ipStr := localAddr.IP.String()
+			if ipStr != "127.0.0.1" && ipStr != "::1" && ipStr != "" {
+				fmt.Printf("[Programmatic Discovery] Automatically resolved local IP: %s\n", ipStr)
+				ips = append(ips, ipStr)
+			}
+		}
+		conn.Close()
+	}
+
+	// 2. Get the public WAN IP using fast public APIs in case of NAT/Internet connections or VPN
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+
+	endpoints := []string{
+		"https://api.ipify.org",
+		"https://ifconfig.me/ip",
+		"https://icanhazip.com",
+	}
+
+	for _, endpoint := range endpoints {
+		req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err == nil {
+			ipStr := strings.TrimSpace(string(body))
+			if ipStr != "" && !strings.Contains(ipStr, " ") {
+				fmt.Printf("[Programmatic Discovery] Automatically resolved public IP: %s\n", ipStr)
+				ips = append(ips, ipStr)
+				break // Got a valid public address, done!
+			}
+		}
+	}
+
+	return ips
+}
+
 // Create a new libp2p Host listening on the specified port
-func makeHost(port int) (host.Host, error) {
+func makeHost(port int, announceIPs []string) (host.Host, error) {
 	// Setup TCP listen address
 	sourceMultiAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port))
 	if err != nil {
@@ -159,8 +221,7 @@ func makeHost(port int) (host.Host, error) {
 		return nil, err
 	}
 
-	// Build Host using modern libp2p options with robust NAT-Traversal parameters
-	return libp2p.New(
+	opts := []libp2p.Option{
 		libp2p.ListenAddrs(sourceMultiAddr, quicMultiAddr),
 		// Use modern Security layer (Noise is default in go-libp2p)
 		libp2p.DefaultSecurity,
@@ -173,7 +234,44 @@ func makeHost(port int) (host.Host, error) {
 		libp2p.EnableRelay(),
 		// Enable decentralized Direct Connection Utility for NAT Hole Punching (DCUtR) 
 		libp2p.EnableHolePunching(),
-	)
+	}
+
+	// Combine manual announce IPs with programmatically discovered ones
+	autoIPs := getAutoIPs()
+	allAnnounceIPs := append(announceIPs, autoIPs...)
+
+	// Configure AnnounceAddrs to override netlink interface resolution failure on Android/Termux
+	if len(allAnnounceIPs) > 0 {
+		var announceAddrs []multiaddr.Multiaddr
+		for _, ip := range allAnnounceIPs {
+			ip = strings.TrimSpace(ip)
+			if ip == "" {
+				continue
+			}
+			// If it's already a multiaddress, parse it directly
+			if strings.HasPrefix(ip, "/") {
+				maddr, err := multiaddr.NewMultiaddr(ip)
+				if err == nil {
+					announceAddrs = append(announceAddrs, maddr)
+				}
+			} else {
+				// Otherwise, assume raw IP and build TCP and QUIC-v1 multiaddresses automatically
+				maddrTCP, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", ip, port))
+				if err == nil {
+					announceAddrs = append(announceAddrs, maddrTCP)
+				}
+				maddrQUIC, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, port))
+				if err == nil {
+					announceAddrs = append(announceAddrs, maddrQUIC)
+				}
+			}
+		}
+		if len(announceAddrs) > 0 {
+			opts = append(opts, libp2p.AnnounceAddrs(announceAddrs...))
+		}
+	}
+
+	return libp2p.New(opts...)
 }
 
 // Set up DHT Routing for rendezvous lookup
