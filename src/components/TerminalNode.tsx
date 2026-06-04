@@ -26,11 +26,37 @@ export default function TerminalNode({
     }
   }, [node.logs]);
 
+  const COMMANDS = ['/peers', '/me', '/exit', '/help'];
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       onSubmitCommand(node.id, node.currentInput);
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      const input = node.currentInput;
+      if (input && input.startsWith('/')) {
+        const matches = COMMANDS.filter(cmd => cmd.startsWith(input));
+        if (matches.length > 0) {
+          const exactIdx = matches.indexOf(input);
+          if (exactIdx !== -1 && matches.length > 1) {
+            const nextMatch = matches[(exactIdx + 1) % matches.length];
+            onInputChange(node.id, nextMatch);
+          } else {
+            onInputChange(node.id, matches[0]);
+          }
+        }
+      }
     }
   };
+
+  // Dynamic autocomplete suggestion text for inline ghost display
+  let suggestionText = '';
+  if (node.currentInput && node.currentInput.startsWith('/')) {
+    const matchingCmd = COMMANDS.find(cmd => cmd.startsWith(node.currentInput) && cmd !== node.currentInput);
+    if (matchingCmd) {
+      suggestionText = node.currentInput + matchingCmd.slice(node.currentInput.length);
+    }
+  }
 
   // Convert log category to specific color scheme
   const getLogColorClass = (type: string, message: string) => {
@@ -179,20 +205,27 @@ Export Date Timestamp  : ${new Date().toISOString()}
       {node.isOnline && (
         <div className="border-t border-[#1E212B] bg-[#07080D] flex items-center p-2">
           <span className="text-[#00FF41] font-bold px-1 select-none font-mono">&gt;</span>
-          <input
-            type="text"
-            className="flex-1 bg-transparent border-0 outline-0 ring-0 focus:outline-none focus:ring-0 text-white font-mono text-xs ml-1 bg-transparent"
-            value={node.currentInput}
-            onChange={(e) => onInputChange(node.id, e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder='Type message or try /peers or /me...'
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-          />
-          <span className="text-[9px] text-[#6B7280] ml-1 select-none font-mono flex items-center gap-1 mr-1" title="Special shell commands">
+          <div className="relative flex-1 flex items-center">
+            {suggestionText && (
+              <span className="absolute left-0 pointer-events-none text-[#4B5563] font-mono text-xs select-none z-0 whitespace-pre ml-1">
+                {suggestionText}
+              </span>
+            )}
+            <input
+              type="text"
+              className="flex-1 bg-transparent border-0 outline-0 ring-0 focus:outline-none focus:ring-0 text-white font-mono text-xs ml-1 bg-transparent z-10"
+              value={node.currentInput}
+              onChange={(e) => onInputChange(node.id, e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder='Type message or try /peers or /me...'
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+          </div>
+          <span className="text-[9px] text-[#6B7280] ml-1 select-none font-mono flex items-center gap-1 mr-1 md:mr-2" title="Tab-completion for commands">
             <HelpCircle className="w-3 h-3 text-[#6B7280]" />
-            <span className="hidden sm:inline">HELP: /peers /me</span>
+            <span className="hidden sm:inline">TAB COMPLETE: {suggestionText ? 'Press Tab' : '/peers /me'}</span>
           </span>
         </div>
       )}
