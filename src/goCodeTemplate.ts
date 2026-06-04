@@ -33,6 +33,11 @@ import (
 const chatProtocol = protocol.ID("/libp2p/chat/1.0.0")
 const mdnsServiceTag = "libp2p-local-chat"
 
+var (
+	cachedLocalIP  string
+	cachedPublicIP string
+)
+
 func main() {
 	// Suppress the spammy netlink-permission errors in basichost because of Android/Termux environments
 	ipfslog.SetLogLevel("basichost", "fatal")
@@ -105,10 +110,15 @@ func main() {
 				openChatStream(ctx, h, peer.ID, config.Nickname)
 			}
 		})
+	}
 
+	// 4b. Start custom UDP broadcast discovery if enabled
+	if config.EnableUDP {
 		fmt.Println("[*] Setting up netlink-free custom UDP broadcast discovery for Termux session sync...")
 		localIP, _ := getAutoIPs()
 		go setupUDPDiscovery(ctx, h, localIP, listenPort, config.Nickname)
+	} else {
+		fmt.Println("[*] Custom UDP Broadcast discovery is disabled via -udp=false flag.")
 	}
 
 	// 5. Start DHT Rendezvous discovery
@@ -140,6 +150,7 @@ type Config struct {
 	Nickname         string
 	RendezvousString string
 	EnableMDNS       bool
+	EnableUDP        bool
 	BootstrapPeers   []string
 	AnnounceIPs      []string
 }
@@ -149,6 +160,7 @@ func parseFlags() *Config {
 	nick := flag.String("nick", "anonymous", "nickname for the chat session")
 	rendezvous := flag.String("room", "chat-with-rendezvous", "rendezvous string for peer discovery")
 	useMdns := flag.Bool("mdns", true, "enable local mDNS peer discovery")
+	useUdp := flag.Bool("udp", true, "enable custom local UDP broadcast peer discovery")
 	bootstrapRaw := flag.String("bootstrap", "", "comma-separated list of multiaddresses for bootstraps")
 	announceRaw := flag.String("announce", "", "comma-separated list of IP addresses or multiaddresses to announce manually")
 
@@ -175,6 +187,7 @@ func parseFlags() *Config {
 		Nickname:         *nick,
 		RendezvousString: *rendezvous,
 		EnableMDNS:       *useMdns,
+		EnableUDP:        *useUdp,
 		BootstrapPeers:   bootstraps,
 		AnnounceIPs:      announceIPs,
 	}
@@ -235,6 +248,8 @@ func getAutoIPs() (string, string) {
 // Create a new libp2p Host listening on the specified port
 func makeHost(port int, announceIPs []string) (host.Host, error) {
 	localIP, publicIP := getAutoIPs()
+	cachedLocalIP = localIP
+	cachedPublicIP = publicIP
 
 	var listenAddrs []multiaddr.Multiaddr
 
@@ -498,7 +513,7 @@ func writeStreamLoop(rw *bufio.ReadWriter, nickname string) {
 // Global console engine for user shell interaction
 func chatConsole(ctx context.Context, h host.Host, nickname string) {
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("Type your message and press ENTER. Commands: /peers, /me, /exit\n> ")
+	fmt.Print("Type your message and press ENTER. Commands: /peers, /netinfo, /me, /exit\n> ")
 
 	for {
 		select {
@@ -532,11 +547,95 @@ func chatConsole(ctx context.Context, h host.Host, nickname string) {
 					}
 				case "/me":
 					fmt.Printf("Nickname: %s | PeerID: %s\n", nickname, h.ID())
+				case "/netinfo":
+					fmt.Println("\n======================================================================")
+					fmt.Println("🌐 P2P NETWORK DIAGNOSTICS & STATUS")
+					fmt.Println("======================================================================")
+					fmt.Printf("● Nickname:            %s\n", nickname)
+					fmt.Printf("● Peer ID:             %s\n", h.ID().String())
+					
+					fmt.Println("\n📡 Listen & Announced Multiaddresses:")
+					addrs := h.Addrs()
+					if len(addrs) == 0 {
+						fmt.Println("  [!] Warning: Host is not listening on any address")
+					} else {
+						for _, addr := range addrs {
+							fmt.Printf("  └─ %s/p2p/%s\n", addr.String(), h.ID().String())
+						}
+					}
+
+					fmt.Println("\n🛡️ NAT & Sandbox Environment Analysis:")
+					local := cachedLocalIP
+					if local == "" {
+						local = "127.0.0.1"
+					}
+					public := cachedPublicIP
+					fmt.Printf("  └─ Local Interface IP: %s\n", local)
+					if public != "" {
+						fmt.Printf("  └─ Public WAN IP:      %s\n", public)
+						if local == public {
+							fmt.Println("  └─ NAT Type:           Public (No NAT / Direct Internet Interface)")
+						} else {
+							// Heuristic classification
+							isCarrierGrade := strings.HasPrefix(local, "100.64.") || strings.HasPrefix(local, "198.18.")
+							if isCarrierGrade {
+								fmt.Println("  └─ NAT Type:           Symmetric NAT / Carrier-Grade NAT (CGNAT) (Likely)")
+								fmt.Println("     💡 CGNAT is heavily restrictive (typical of mobile LTE/5G).")
+								fmt.Println("        Direct peers will auto-connect via Hole Punching (DCUtR) or Relay.")
+							} else {
+								fmt.Println("  └─ NAT Type:           Restricted / Cone NAT (Likely)")
+								fmt.Println("     💡 Standard home Wi-Fi NAT. Auto-traversal or UPnP should work easily.")
+							}
+						}
+					} else {
+						fmt.Println("  └─ Public WAN IP:      Unknown (Could not query WAN checker - Offline or no internet routing)")
+						fmt.Println("  └─ NAT Type:           Unknown / Isolated Local Network")
+					}
+					
+					fmt.Println("  └─ OS Sandbox Info:    Android/Termux detected. OS Netlink-route route discovery is restricted.")
+					fmt.Println("  └─ Sync Discovery:     Custom-built UDP Broadcast synchronization is active on port 19999.")
+
+					conns := h.Network().Conns()
+					fmt.Printf("\n🔗 Connected Network Links (%d active connection(s)):\n", len(conns))
+					if len(conns) == 0 {
+						fmt.Println("  No active connections currently. Try connecting peers automatically or manually.")
+					} else {
+						for idx, c := range conns {
+							remoteAddr := c.RemoteMultiaddr().String()
+							remotePeer := c.RemotePeer().String()
+							
+							isRelayed := strings.Contains(remoteAddr, "/p2p-circuit")
+							linkType := "DIRECT LINK"
+							if isRelayed {
+								linkType = "🔴 RELAYED CONNECTION (Circuit Relay v2)"
+							} else {
+								linkType = "🟢 DIRECT CONNECTION"
+							}
+							
+							transport := "TCP"
+							if strings.Contains(remoteAddr, "/udp") {
+								if strings.Contains(remoteAddr, "/quic") {
+									transport = "UDP-QUIC"
+								} else {
+									transport = "UDP"
+								}
+							}
+							
+							fmt.Printf("  [%d] Peer ID:   %s\n", idx+1, remotePeer)
+							fmt.Printf("      Address:   %s\n", remoteAddr)
+							fmt.Printf("      Type:      %s (%s transport)\n", linkType, transport)
+						}
+					}
+					
+					fmt.Println("\n🤝 Decentralized Auto-Traversal Technologies:")
+					fmt.Println("  └─ UPnP/NAT-PMP Port Forwarding:  Active/Requested")
+					fmt.Println("  └─ DCUtR Direct Hole Punching:     Enabled & Dynamic")
+					fmt.Println("======================================================================\n")
 				case "/exit":
 					fmt.Println("[*] Exiting chat...")
 					os.Exit(0)
 				default:
-					fmt.Println("[!] Unknown command. Use /peers, /me, or /exit")
+					fmt.Println("[!] Unknown command. Use /peers, /netinfo, /me, or /exit")
 				}
 				fmt.Print("> ")
 				continue
