@@ -170,6 +170,70 @@ Export Date Timestamp  : ${new Date().toISOString()}
         </div>
       </div>
 
+      {/* 
+        Step-by-step discovery state machine progress indicator
+      */}
+      {node.isOnline && (
+        <div className="bg-[#0B0C12] border-b border-[#1E212B] px-3.5 py-2 flex flex-col gap-2 md:flex-row md:items-center md:justify-between text-[10px] font-mono select-none">
+          <div className="flex items-center gap-1.5 min-w-0 pr-2">
+            <span className="text-[#6B7280] font-bold uppercase tracking-wider text-[9px] shrink-0">Status:</span>
+            <span className={`text-xs tracking-tight font-semibold shrink-0 ${
+              (node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room')) === 'connected' ? 'text-[#00FF41]' : 'text-[#F27D26]'
+            }`}>
+              {(node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room')) === 'bootstrapping' && '⚙️ Bootstrapping'}
+              {(node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room')) === 'querying_dht' && '🛰️ Querying DHT'}
+              {(node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room')) === 'searching_room' && '📡 Searching Room'}
+              {(node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room')) === 'connected' && '🎉 Connected'}
+            </span>
+            <span className="text-slate-700 hidden md:inline">|</span>
+            <span className="text-[#9CA3AF] text-[9px] truncate hidden md:inline">
+              {(node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room')) === 'bootstrapping' && 'Syncing with global seed bootstrap nodes...'}
+              {(node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room')) === 'querying_dht' && 'Crawling Go-Kad-DHT routing tables...'}
+              {(node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room')) === 'searching_room' && `Broadcasting rendezvous search: "${node.rendezvous}"...`}
+              {(node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room')) === 'connected' && 'Yamux peer stream upgraded!'}
+            </span>
+          </div>
+          
+          <div className="flex items-center gap-1 flex-wrap">
+            {[
+              { key: 'bootstrapping', label: 'Bootstrap' },
+              { key: 'querying_dht', label: 'Query DHT' },
+              { key: 'searching_room', label: 'Seek Room' },
+              { key: 'connected', label: 'Connected' }
+            ].map((s, idx, arr) => {
+              const state = node.discoveryState || (node.peers.length > 0 ? 'connected' : 'searching_room');
+              const activeIndex = arr.findIndex(item => item.key === state);
+              const isActive = s.key === state;
+              const isPast = activeIndex > idx;
+              
+              return (
+                <React.Fragment key={s.key}>
+                  <div className={`flex items-center gap-1 rounded px-1.5 py-0.5 border ${
+                    isActive 
+                      ? 'bg-[#F27D26]/10 text-[#F27D26] border-[#F27D26]/30 animate-pulse' 
+                      : isPast 
+                      ? 'bg-[#00FF41]/5 text-[#00FF41]/80 border-[#00FF41]/10' 
+                      : 'bg-transparent text-[#4B5563] border-transparent'
+                  }`}>
+                    {isPast ? (
+                      <span className="text-[9px] font-bold">✓</span>
+                    ) : isActive ? (
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#F27D26] animate-pulse" />
+                    ) : (
+                      <span className="text-[7px] opacity-45">■</span>
+                    )}
+                    <span className="tracking-tight uppercase text-[9px] font-semibold">{s.label}</span>
+                  </div>
+                  {idx < arr.length - 1 && (
+                    <span className="text-[#202330] text-[8px] select-none">⟫</span>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Internal interactive terminal console */}
       <div 
         ref={scrollRef}

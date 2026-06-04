@@ -32,7 +32,8 @@ export default function App() {
         { id: 'a7', timestamp: '10:48:12', type: 'system', message: '[+] Connected! Use command shell below to test streaming.' }
       ],
       chatHistory: [],
-      currentInput: ''
+      currentInput: '',
+      discoveryState: 'connected'
     },
     {
       id: 'node-b',
@@ -53,7 +54,8 @@ export default function App() {
         { id: 'b7', timestamp: '10:48:12', type: 'system', message: '[+] Peer link verified. Shell is active!' }
       ],
       chatHistory: [],
-      currentInput: ''
+      currentInput: '',
+      discoveryState: 'connected'
     },
     {
       id: 'node-c',
@@ -66,7 +68,8 @@ export default function App() {
       peers: [],
       logs: [],
       chatHistory: [],
-      currentInput: ''
+      currentInput: '',
+      discoveryState: 'offline'
     }
   ]);
 
@@ -104,6 +107,7 @@ export default function App() {
               ...n,
               isOnline: true,
               peers: [],
+              discoveryState: 'bootstrapping',
               logs: [
                 { id: `sys-1-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[*] Starting Peer-to-Peer node as "${n.nickname}"...` },
                 { id: `sys-2-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Created libp2p Host successfully on port ${n.port}.` },
@@ -121,6 +125,7 @@ export default function App() {
               ...n,
               isOnline: false,
               peers: [],
+              discoveryState: 'offline',
               logs: []
             };
           }
@@ -129,10 +134,34 @@ export default function App() {
       })
     );
 
-    // If turned online, trigger quick dynamic mDNS/DHT discovery matching
+    // If turned online, queue dynamic step transitions
+    const sourceNode = nodes.find((n) => n.id === nodeId);
+    if (sourceNode && !sourceNode.isOnline) {
+      setTimeout(() => {
+        setNodes((curr) =>
+          curr.map((cn) =>
+            cn.id === nodeId && cn.isOnline && cn.peers.length === 0
+              ? { ...cn, discoveryState: 'querying_dht' }
+              : cn
+          )
+        );
+      }, 1000);
+
+      setTimeout(() => {
+        setNodes((curr) =>
+          curr.map((cn) =>
+            cn.id === nodeId && cn.isOnline && cn.peers.length === 0
+              ? { ...cn, discoveryState: 'searching_room' }
+              : cn
+          )
+        );
+      }, 2500);
+    }
+
+    // Trigger quick dynamic mDNS/DHT discovery matching shortly after booting
     setTimeout(() => {
       triggerPeerDiscovery();
-    }, 1200);
+    }, 1500);
   };
 
   // Discovery engine: checks who is online and coordinates links based on Room value
@@ -175,6 +204,7 @@ export default function App() {
           return {
             ...n,
             peers: [...n.peers, ...newlyDiscovered],
+            discoveryState: 'connected',
             logs: [...n.logs, ...addedLogs]
           };
         }
@@ -207,10 +237,23 @@ export default function App() {
     setNodes((prev) =>
       prev.map((n) => {
         if (!n.isOnline) return n;
+
+        // Schedule change of discoveryState to 'searching_room' shortly
+        setTimeout(() => {
+          setNodes((curr) =>
+            curr.map((cn) =>
+              cn.id === n.id && cn.isOnline && cn.peers.length === 0
+                ? { ...cn, discoveryState: 'searching_room' }
+                : cn
+            )
+          );
+        }, 1500);
+
         return {
           ...n,
           rendezvous: rendezvousRoom,
-          peers: [] // clears peers to trigger fresh rendezvous handshakes
+          peers: [], // clears peers to trigger fresh rendezvous handshakes
+          discoveryState: 'querying_dht'
         };
       })
     );
@@ -251,10 +294,61 @@ export default function App() {
       switch (cmd) {
         case '/help':
           appendNodeLog(nodeId, 'system', 'Available subcommands:');
-          appendNodeLog(nodeId, 'system', '  /peers - List all cryptographic connected multihash peers');
-          appendNodeLog(nodeId, 'system', '  /me    - Display current client configuration metadata');
-          appendNodeLog(nodeId, 'system', '  /exit  - Shut down this libp2p daemon process gracefully');
+          appendNodeLog(nodeId, 'system', '  /peers         - List all cryptographic connected multihash peers');
+          appendNodeLog(nodeId, 'system', '  /connect <maddr> - Manually dial a node using its multiaddress');
+          appendNodeLog(nodeId, 'system', '  /me            - Display current client configuration metadata');
+          appendNodeLog(nodeId, 'system', '  /exit          - Shut down this libp2p daemon process gracefully');
           break;
+
+        case '/connect': {
+          if (parts.length < 2) {
+            appendNodeLog(nodeId, 'system', '[!] Usage: /connect <multiaddress>');
+            break;
+          }
+          const targetAddr = parts[1];
+          const portMatch = targetAddr.match(/\/tcp\/(\d+)/);
+          const portVal = portMatch ? parseInt(portMatch[1], 10) : null;
+          
+          let targetNode = nodes.find(n => n.isOnline && portVal !== null && n.port === portVal);
+          if (!targetNode) {
+            targetNode = nodes.find(n => n.isOnline && n.id !== nodeId && (targetAddr.includes(n.peerId) || targetAddr.includes(n.id)));
+          }
+
+          if (targetNode) {
+            if (sourceNode.peers.includes(targetNode.id)) {
+              appendNodeLog(nodeId, 'system', `[!] Already connected to ${targetNode.nickname}.`);
+              break;
+            }
+            
+            appendNodeLog(nodeId, 'system', `[*] Manually dialing ${targetNode.nickname} via ${targetAddr}...`);
+            const targetId = targetNode.id;
+            
+            setTimeout(() => {
+              setNodes((prev) =>
+                prev.map((n) => {
+                  if (n.id === nodeId) {
+                    return {
+                      ...n,
+                      peers: [...n.peers, targetId],
+                      logs: [...n.logs, { id: `manual-1-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Manually connected to ${targetNode!.nickname}!` }]
+                    };
+                  }
+                  if (n.id === targetId) {
+                    return {
+                      ...n,
+                      peers: [...n.peers, nodeId],
+                      logs: [...n.logs, { id: `manual-2-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Incoming manual link from ${sourceNode.nickname}!` }]
+                    };
+                  }
+                  return n;
+                })
+              );
+            }, 600);
+          } else {
+            appendNodeLog(nodeId, 'error', `[!] Dial failed: Could not find online peer with address "${targetAddr}".`);
+          }
+          break;
+        }
 
         case '/peers':
           appendNodeLog(nodeId, 'system', '--- Active P2P Connections ---');
@@ -348,7 +442,8 @@ export default function App() {
           { id: 'r4', timestamp: getTimestamp(), type: 'system', message: '[+] Successfully connected to Bob!' }
         ],
         chatHistory: [],
-        currentInput: ''
+        currentInput: '',
+        discoveryState: 'connected'
       },
       {
         id: 'node-b',
@@ -366,7 +461,8 @@ export default function App() {
           { id: 'rb4', timestamp: getTimestamp(), type: 'system', message: '[+] Successfully connected to Alice!' }
         ],
         chatHistory: [],
-        currentInput: ''
+        currentInput: '',
+        discoveryState: 'connected'
       },
       {
         id: 'node-c',
@@ -379,7 +475,8 @@ export default function App() {
         peers: [],
         logs: [],
         chatHistory: [],
-        currentInput: ''
+        currentInput: '',
+        discoveryState: 'offline'
       }
     ]);
   };

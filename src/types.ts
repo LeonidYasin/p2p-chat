@@ -31,6 +31,7 @@ export interface P2PNode {
   logs: NetworkLog[];     // Console and system logs
   chatHistory: DirectMessage[]; // Direct chat messages
   currentInput: string;   // Active input in terminal screen
+  discoveryState?: 'offline' | 'bootstrapping' | 'querying_dht' | 'searching_room' | 'connected';
 }
 
 export interface RendezvousRoom {

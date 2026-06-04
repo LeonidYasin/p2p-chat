@@ -128,8 +128,40 @@ func main() {
 		fmt.Printf("[*] Advertising and searching rendezvous room: \"%s\"...\n", config.RendezvousString)
 		routingDiscovery := discoveryrouting.NewRoutingDiscovery(kademliaDHT)
 		
-		// Advertise our presence
-		discoveryutil.Advertise(ctx, routingDiscovery, config.RendezvousString)
+		// Launch background advertiser loop that waits for connection first
+		go func() {
+			// First, wait for at least one connection to establish (e.g. bootstrap nodes)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					if len(h.Network().Conns()) > 0 {
+						break
+					}
+					time.Sleep(1 * time.Second)
+				}
+			}
+			
+			// Periodically advertise presence to the global DHT routing table
+			ticker := time.NewTicker(45 * time.Second)
+			defer ticker.Stop()
+			
+			// Initial advertise once connection is confirmed
+			fmt.Printf("\n[DHT: 📡 Advertising] Registering node in room \"%s\" on the global Kad-DHT...\n> ", config.RendezvousString)
+			discoveryutil.Advertise(ctx, routingDiscovery, config.RendezvousString)
+			
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if len(h.Network().Conns()) > 0 {
+						discoveryutil.Advertise(ctx, routingDiscovery, config.RendezvousString)
+					}
+				}
+			}
+		}()
 
 		// Continuously search for other peers in background
 		go discoveryLoop(ctx, h, routingDiscovery, config.RendezvousString, config.Nickname)
@@ -566,7 +598,7 @@ func writeStreamLoop(rw *bufio.ReadWriter, nickname string) {
 // Global console engine for user shell interaction
 func chatConsole(ctx context.Context, h host.Host, nickname string) {
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("Type your message and press ENTER. Commands: /peers, /netinfo, /me, /exit\n> ")
+	fmt.Print("Type your message and press ENTER. Commands: /peers, /connect <addr>, /netinfo, /me, /exit\n> ")
 
 	for {
 		select {
@@ -588,6 +620,32 @@ func chatConsole(ctx context.Context, h host.Host, nickname string) {
 			if strings.HasPrefix(input, "/") {
 				cmdParts := strings.Split(input, " ")
 				switch cmdParts[0] {
+				case "/connect":
+					if len(cmdParts) < 2 {
+						fmt.Println("[!] Usage: /connect <multiaddress>")
+						fmt.Print("> ")
+						continue
+					}
+					targetAddrRaw := cmdParts[1]
+					addr, err := multiaddr.NewMultiaddr(targetAddrRaw)
+					if err != nil {
+						fmt.Printf("[!] Multiaddress format error: %v\n", err)
+						fmt.Print("> ")
+						continue
+					}
+					peerinfo, err := peer.AddrInfoFromP2pAddr(addr)
+					if err != nil {
+						fmt.Printf("[!] Peer ID extraction error: %v\n", err)
+						fmt.Print("> ")
+						continue
+					}
+					fmt.Printf("[*] Manually dialing %s...\n", peerinfo.ID.ShortString())
+					if err := h.Connect(ctx, *peerinfo); err != nil {
+						fmt.Printf("[!] Manual connection failed: %v\n", err)
+					} else {
+						fmt.Printf("[+] Manually connected to %s!\n", peerinfo.ID.ShortString())
+						openChatStream(ctx, h, peerinfo.ID, nickname)
+					}
 				case "/peers":
 					fmt.Println("--- Connected Peers ---")
 					peers := h.Network().Peers()
