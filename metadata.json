@@ -1,0 +1,6 @@
+{
+  "name": "Go libp2p Messenger Sandbox",
+  "description": "An interactive web workspace, playground, and node simulator for educational Go libp2p console chat with rendezvous peer discovery across local networks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
