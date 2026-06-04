@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -44,9 +45,24 @@ func main() {
 
 	fmt.Printf("[*] Starting Peer-to-Peer node as \"%s\"...\n", config.Nickname)
 
-	// 1. Create the libp2p host
-	h, err := makeHost(config.ListenPort, config.AnnounceIPs)
-	if err != nil {
+	// 1. Create the libp2p host with automatic port conflict resolution
+	var h host.Host
+	var err error
+	listenPort := config.ListenPort
+	for attempt := 0; attempt < 20; attempt++ {
+		h, err = makeHost(listenPort, config.AnnounceIPs)
+		if err == nil {
+			break
+		}
+		errStr := err.Error()
+		if strings.Contains(errStr, "address already in use") || strings.Contains(errStr, "bind") {
+			if config.ListenPort == 0 {
+				log.Fatalln("[!] Failed to create host on random port:", err)
+			}
+			fmt.Printf("[!] Port %d is already in use. Retrying with port %d...\n", listenPort, listenPort+1)
+			listenPort++
+			continue
+		}
 		log.Fatalln("[!] Failed to create libp2p host:", err)
 	}
 	defer h.Close()
@@ -89,6 +105,10 @@ func main() {
 				openChatStream(ctx, h, peer.ID, config.Nickname)
 			}
 		})
+
+		fmt.Println("[*] Setting up netlink-free custom UDP broadcast discovery for Termux session sync...")
+		localIP, _ := getAutoIPs()
+		go setupUDPDiscovery(ctx, h, localIP, listenPort, config.Nickname)
 	}
 
 	// 5. Start DHT Rendezvous discovery
@@ -379,7 +399,7 @@ func (n *discoveryNotifee) HandlePeerFound(peerInfo peer.AddrInfo) {
 func setupMDNS(h host.Host, serviceTag string, callback func(peer.AddrInfo)) {
 	s := mdns.NewMdnsService(h, serviceTag, &discoveryNotifee{h: h, c: callback})
 	if err := s.Start(); err != nil {
-		log.Println("[!] Failed to start mDNS service:", err)
+		fmt.Println("[*] Standard mDNS local discovery is unsupported in this environment due to OS netlink restrictions. Custom UDP Broadcast Discovery is active to handle auto connections instead.")
 	}
 }
 
@@ -537,6 +557,167 @@ func chatConsole(ctx context.Context, h host.Host, nickname string) {
 			activeStreams = aliveStreams // Keep active streams only
 
 			fmt.Print("> ")
+		}
+	}
+}
+
+// UDPDiscoveryPayload holds peer data exchanged over UDP broadcast
+type UDPDiscoveryPayload struct {
+	PeerID string   `json:"peer_id"`
+	Addrs  []string `json:"addrs"`
+	Nick   string   `json:"nick"`
+}
+
+// setupUDPDiscovery starts a custom UDP broadcast/multicast peer discovery
+func setupUDPDiscovery(ctx context.Context, h host.Host, localIP string, listenPortInUse int, nickname string) {
+	udpPort := 19999
+
+	// 1. Create UDP broadcast listener config with SO_REUSEPORT & SO_REUSEADDR
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var opErr error
+			err := c.Control(func(fd uintptr) {
+				// Allow multiple sessions to bind to the same port on the same phone
+				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+				// Enable broadcast capability for UDP sockets
+				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
+			})
+			if err != nil {
+				return err
+			}
+			return opErr
+		},
+	}
+
+	conn, err := lc.ListenPacket(ctx, "udp4", fmt.Sprintf("0.0.0.0:%d", udpPort))
+	if err != nil {
+		fmt.Printf("[!] Failed to setup custom UDP automatic-discovery listener: %v\n", err)
+		return
+	}
+	defer conn.Close()
+
+	udpConn, ok := conn.(*net.UDPConn)
+	if !ok {
+		return
+	}
+
+	// 2. Start Receiver Subroutine
+	go func() {
+		buf := make([]byte, 8192)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Set short read deadlines to periodically wake up and evaluate context cancel
+				udpConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+				n, _, rerr := udpConn.ReadFrom(buf)
+				if rerr != nil {
+					continue
+				}
+
+				var payload UDPDiscoveryPayload
+				if jerr := json.Unmarshal(buf[:n], &payload); jerr != nil {
+					continue
+				}
+
+				if payload.PeerID == h.ID().String() {
+					continue // Ignore ourselves
+				}
+
+				peerID, perr := peer.Decode(payload.PeerID)
+				if perr != nil {
+					continue
+				}
+
+				// Only proceed if not already connected
+				if h.Network().Connectedness(peerID) == network.Connected {
+					continue
+				}
+
+				var maddrs []multiaddr.Multiaddr
+				for _, addrStr := range payload.Addrs {
+					maddr, merr := multiaddr.NewMultiaddr(addrStr)
+					if merr == nil {
+						maddrs = append(maddrs, maddr)
+					}
+				}
+
+				if len(maddrs) == 0 {
+					continue
+				}
+
+				peerInfo := peer.AddrInfo{
+					ID:    peerID,
+					Addrs: maddrs,
+				}
+
+				fmt.Printf("\n[UDP Discovery] Automatically discovered peer: %s (%s)\n> ", payload.Nick, peerID.ShortString())
+				if connectErr := h.Connect(ctx, peerInfo); connectErr == nil {
+					fmt.Printf("[UDP Discovery] Connected to %s!\n> ", payload.Nick)
+					openChatStream(ctx, h, peerID, nickname)
+				}
+			}
+		}
+	}()
+
+	// 3. Start Sender/Advertiser Loop
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	// Define destinations to broadcast to: universal, localhost, and dynamic subnet directed broadcast
+	broadcastAddrs := []string{
+		"127.0.0.1:19999",
+		"255.255.255.255:19999",
+	}
+
+	if localIP != "127.0.0.1" && localIP != "" {
+		parts := strings.Split(localIP, ".")
+		if len(parts) == 4 {
+			// Directed broadcast addresses for common networks
+			broadcastAddrs = append(broadcastAddrs, fmt.Sprintf("%s.%s.%s.255:19999", parts[0], parts[1], parts[2]))
+			broadcastAddrs = append(broadcastAddrs, fmt.Sprintf("%s.%s.255.255:19999", parts[0], parts[1]))
+		}
+	}
+
+	var resolvedAddrs []*net.UDPAddr
+	for _, addrStr := range broadcastAddrs {
+		addr, rerr := net.ResolveUDPAddr("udp4", addrStr)
+		if rerr == nil {
+			resolvedAddrs = append(resolvedAddrs, addr)
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			var addrStrs []string
+			for _, maddr := range h.Addrs() {
+				// Publish all multiaddresses of this host to make sure peers on loopback, LAN or WAN run cleanly
+				addrStrs = append(addrStrs, maddr.String())
+			}
+
+			if len(addrStrs) == 0 {
+				continue
+			}
+
+			payload := UDPDiscoveryPayload{
+				PeerID: h.ID().String(),
+				Addrs:  addrStrs,
+				Nick:   nickname,
+			}
+
+			data, merr := json.Marshal(payload)
+			if merr != nil {
+				continue
+			}
+
+			for _, dest := range resolvedAddrs {
+				udpConn.WriteTo(data, dest)
+			}
 		}
 	}
 }
