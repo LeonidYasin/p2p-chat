@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -378,27 +380,55 @@ func setupDHT(ctx context.Context, h host.Host, bootstrapPeers []string) (*dht.I
 // Connect to bootstrap peers
 func bootstrapConnect(ctx context.Context, h host.Host, bootstrapPeers []string) {
 	if len(bootstrapPeers) == 0 {
+		fmt.Println("[!] No bootstrap peers specified. Running in isolated mode.")
 		return
 	}
-	fmt.Println("[*] Connecting to DHT bootstrap nodes...")
+	fmt.Printf("[*] Connecting to %d DHT bootstrap node(s)...\n", len(bootstrapPeers))
+	
+	var wg sync.WaitGroup
+	var successCount int32
+	var failCount int32
+
 	for _, peerAddrRaw := range bootstrapPeers {
 		addr, err := multiaddr.NewMultiaddr(peerAddrRaw)
 		if err != nil {
+			fmt.Printf("[!] Bootstrap address parse error for %s: %v\n", peerAddrRaw, err)
 			continue
 		}
 		peerinfo, err := peer.AddrInfoFromP2pAddr(addr)
 		if err != nil {
+			fmt.Printf("[!] Bootstrap peer info error for %s: %v\n", peerAddrRaw, err)
 			continue
 		}
 
+		wg.Add(1)
 		go func(info *peer.AddrInfo) {
+			defer wg.Done()
+			fmt.Printf("[*] Routing: Handshaking with bootstrap node: %s...\n", info.ID.ShortString())
 			if err := h.Connect(ctx, *info); err != nil {
-				// Failed to connect to this specific bootstrap, which is fine
+				atomic.AddInt32(&failCount, 1)
 			} else {
-				fmt.Printf("[+] Established connection to bootstrap node: %s\n", info.ID.ShortString())
+				atomic.AddInt32(&successCount, 1)
+				fmt.Printf("[+] Established connection to DHT bootstrap: %s!\n", info.ID.ShortString())
 			}
 		}(peerinfo)
 	}
+
+	// Print feedback
+	go func() {
+		wg.Wait()
+		s := atomic.LoadInt32(&successCount)
+		f := atomic.LoadInt32(&failCount)
+		fmt.Printf("[*] DHT Bootstrap Result: %d connected, %d failed.\n", s, f)
+		if s == 0 {
+			fmt.Println("[!] WARNING: Initial bootstrap active connections: 0.")
+			fmt.Println("    To test global peer discovery, at least one bootstrap must connect successfully.")
+			fmt.Println("    Ensure you have an active internet connection and UDP/TCP ports allow outbound traffic.")
+		} else {
+			fmt.Printf("[+] Successfully attached to the global P2P Kad-DHT routing table (Connected to %d boots)!\n", s)
+		}
+		fmt.Print("> ")
+	}()
 }
 
 // Setup local mDNS peer discovery handler
@@ -420,40 +450,65 @@ func setupMDNS(h host.Host, serviceTag string, callback func(peer.AddrInfo)) {
 
 // Periodically search for new peers via the Rendezvous string
 func discoveryLoop(ctx context.Context, h host.Host, routingDiscovery *discoveryrouting.RoutingDiscovery, rendezvous string, nickname string) {
+	// Let bootstrapping start first for 3 seconds before querying DHT
+	time.Sleep(3 * time.Second)
+
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
+
+	runSearch := func() {
+		conns := len(h.Network().Conns())
+		if conns == 0 {
+			fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Peer connections: 0 (No active routing links to crawl. Waiting for DHT bootstrap...)\n> ", rendezvous)
+			return
+		}
+
+		fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Live network links: %d. Actively crawling Kad-DHT indices...\n> ", rendezvous, conns)
+		peerChan, err := routingDiscovery.FindPeers(ctx, rendezvous)
+		if err != nil {
+			fmt.Printf("\n[Search: ⚠️ Error] Failed to initiate DHT search: %v\n> ", err)
+			return
+		}
+
+		foundAny := false
+		for peerInfo := range peerChan {
+			if peerInfo.ID == h.ID() {
+				continue
+			}
+
+			// Check if we are already connected to this peer
+			if h.Network().Connectedness(peerInfo.ID) == network.Connected {
+				continue
+			}
+
+			foundAny = true
+			fmt.Printf("\n[Search: ✨ Discovered] Found candidate peer ID %s in room \"%s\"! Pitching secure link...\n> ", peerInfo.ID.ShortString(), rendezvous)
+			
+			// Try to connect to peer
+			err := h.Connect(ctx, peerInfo)
+			if err != nil {
+				fmt.Printf("\n[Search: ⚠️ Handshake fail] Link to %s refused/timed out: %v (DCUtR hole punching or Circuit Relay v2 will try again shortly)\n> ", peerInfo.ID.ShortString(), err)
+				continue
+			}
+
+			fmt.Printf("\n[Search: 🎉 CONNECTED] Fully connected to peer %s! Upgrading libp2p stream...\n> ", peerInfo.ID.ShortString())
+			openChatStream(ctx, h, peerInfo.ID, nickname)
+		}
+
+		if !foundAny {
+			fmt.Printf("\n[Search: 📡 Querying DHT] Done. 0 other peers currently online in room \"%s\". (Check if separate devices are spelling room identically)\n> ", rendezvous)
+		}
+	}
+
+	// First direct run
+	runSearch()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Search for peers advertising this rendezvous namespace
-			peerChan, err := routingDiscovery.FindPeers(ctx, rendezvous)
-			if err != nil {
-				continue
-			}
-
-			for peerInfo := range peerChan {
-				if peerInfo.ID == h.ID() {
-					continue
-				}
-
-				// Check if we are already connected to this peer
-				if h.Network().Connectedness(peerInfo.ID) == network.Connected {
-					continue
-				}
-
-				fmt.Printf("[Rendezvous] Found new peer in room \"%s\": %s\n", rendezvous, peerInfo.ID.ShortString())
-				err := h.Connect(ctx, peerInfo)
-				if err != nil {
-					// Could not connect, which is common in decentralized setup
-					continue
-				}
-
-				fmt.Printf("[Rendezvous] Connected to room peer %s!\n", peerInfo.ID.ShortString())
-				openChatStream(ctx, h, peerInfo.ID, nickname)
-			}
+			runSearch()
 		}
 	}
 }

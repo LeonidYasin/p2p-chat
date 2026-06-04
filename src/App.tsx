@@ -109,7 +109,10 @@ export default function App() {
                 { id: `sys-2-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Created libp2p Host successfully on port ${n.port}.` },
                 { id: `sys-3-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Peer ID: ${n.peerId}` },
                 { id: `sys-4-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Multiaddress: /ip4/127.0.0.1/tcp/${n.port}/p2p/${n.peerId.slice(0, 10)}...` },
-                { id: `sys-5-${Date.now()}`, timestamp: 'connecting', type: 'discovery', message: `[*] Advertising to rendezvous namespace "${rendezvousRoom}"...` }
+                { id: `sys-b1-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[*] Connecting to 1 DHT bootstrap node(s)...` },
+                { id: `sys-b2-${Date.now()}`, timestamp: getTimestamp(), type: 'discovery', message: `[+] Established connection to DHT bootstrap: QmBootstrap!` },
+                { id: `sys-b3-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Successfully attached to the global P2P Kad-DHT routing table (Connected to 1 boots)!` },
+                { id: `sys-5-${Date.now()}`, timestamp: getTimestamp(), type: 'discovery', message: `[Search: 📡 Querying DHT] Room: "${rendezvousRoom}" | Live network links: 1. Actively crawling Kad-DHT indices...` }
               ]
             };
           } else {
@@ -158,13 +161,13 @@ export default function App() {
                 id: `disc-${Date.now()}-${pId}`,
                 timestamp: getTimestamp(),
                 type: 'discovery' as const,
-                message: `[Rendezvous] Found new peer in room "${rendezvousRoom}": Qm${shortPeerId}...`
+                message: `[Search: ✨ Discovered] Found candidate peer ID Qm${shortPeerId}... in room "${rendezvousRoom}"! Pitching secure link...`
               },
               {
                 id: `upg-${Date.now()}-${pId}`,
                 timestamp: getTimestamp(),
                 type: 'stream' as const,
-                message: `[Stream] Upgraded stream /libp2p/chat/1.0.0 with ${peerObj?.nickname}`
+                message: `[Search: 🎉 CONNECTED] Fully connected to peer ${peerObj?.nickname}! Upgrading libp2p stream...`
               }
             ];
           });
