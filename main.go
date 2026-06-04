@@ -24,6 +24,7 @@ import (
 	discoveryrouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	discoveryutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	ipfslog "github.com/ipfs/go-log/v2"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -32,6 +33,9 @@ const chatProtocol = protocol.ID("/libp2p/chat/1.0.0")
 const mdnsServiceTag = "libp2p-local-chat"
 
 func main() {
+	// Suppress the spammy netlink-permission errors in basichost because of Android/Termux environments
+	ipfslog.SetLogLevel("basichost", "fatal")
+
 	// Parse command-line flags
 	config := parseFlags()
 
