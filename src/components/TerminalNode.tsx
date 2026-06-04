@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { P2PNode } from '../types';
-import { Terminal, Shield, Power, Wifi, HelpCircle } from 'lucide-react';
+import { Terminal, Shield, Power, Wifi, HelpCircle, Download } from 'lucide-react';
 
 interface TerminalNodeProps {
   node: P2PNode;
@@ -48,6 +48,43 @@ export default function TerminalNode({
     return 'text-[#E0E0E0]';
   };
 
+  const handleExportLogs = () => {
+    if (node.logs.length === 0) return;
+
+    // Build structured log report for educational inspection
+    const headerBanner = `======================================================================
+                  GOP2P-TERMINAL LOG DUMP REPORT
+======================================================================
+Target Daemon Identity : ${node.nickname}
+Simulated Subnet Bind  : 127.0.0.1:${node.port}
+Protocol Speciation    : Multicast DNS LAN Sync & Kademlia DHT
+Status At Dump         : ${node.isOnline ? 'ACTIVE / RUNNING' : 'SUSPENDED'}
+Session Message-count  : ${node.logs.length} entries
+Export Date Timestamp  : ${new Date().toISOString()}
+======================================================================
+
+[LOG ENTRIES]
+`;
+
+    const logLines = node.logs.map(log => {
+      const typeLabel = `[${log.type.toUpperCase()}]`.padEnd(11, ' ');
+      return `${log.timestamp} ${typeLabel} : ${log.message}`;
+    }).join('\n');
+
+    const fullDump = headerBanner + '\n' + logLines + '\n\n========================= END OF LOG DUMP =========================';
+
+    const blob = new Blob([fullDump], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `libp2p-${node.nickname.toLowerCase()}-session.log`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className={`flex flex-col h-full bg-[#12141C] border rounded-lg overflow-hidden transition-all duration-300 ${
       node.isOnline 
@@ -81,6 +118,18 @@ export default function TerminalNode({
               <span>{peerCount} {peerCount === 1 ? 'peer' : 'peers'}</span>
             </div>
           )}
+          <button
+            onClick={handleExportLogs}
+            disabled={node.logs.length === 0}
+            title={node.logs.length === 0 ? "Terminal log is empty" : `Export ${node.nickname}'s session logs (.log)`}
+            className={`p-1 rounded cursor-pointer transition-colors border ${
+              node.logs.length === 0
+                ? 'bg-[#1E212B]/20 text-[#6B7280]/50 border-transparent cursor-not-allowed'
+                : 'bg-[#00FF41]/10 text-[#00FF41] hover:bg-[#00FF41]/25 border-[#00FF41]/20 hover:shadow-[0_0_8px_rgba(0,255,65,0.15)]'
+            }`}
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
           <button
             onClick={() => onTogglePower(node.id)}
             title={node.isOnline ? "Terminate p2p session (Ctrl+C)" : "Launch libp2p main.go"}

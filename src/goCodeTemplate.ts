@@ -126,9 +126,11 @@ func parseFlags() *Config {
 	flag.Parse()
 
 	bootstraps := []string{
-		// Default public test bootstrap peers
+		// Default public test bootstrap peers (WSS & TCP on 443 & 4001)
 		"/dns4/bootstrap.libp2p.io/tcp/443/wss/p2p/QmNnooDu7bfj696X5A9JNd7Sj7dFi9WjOLN4Cms99E2IJg",
 		"/dns4/node0.preload.ipfs.io/tcp/443/wss/p2p/QmY7Yv7S75f1AGv9P89LscYvXWJ8rffy45PGL4G5k4U86r",
+		"/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvVWZkpYgj66YhC6P2Y7K6N21w99H6GdfjTMU71",
+		"/dns4/bootstrap.libp2p.io/tcp/4001/p2p/QmNnooDu7bfj696X5A9JNd7Sj7dFi9WjOLN4Cms99E2IJg",
 	}
 	if *bootstrapRaw != "" {
 		bootstraps = strings.Split(*bootstrapRaw, ",")
@@ -145,27 +147,39 @@ func parseFlags() *Config {
 
 // Create a new libp2p Host listening on the specified port
 func makeHost(port int) (host.Host, error) {
-	// TCP multiaddress
+	// Setup TCP listen address
 	sourceMultiAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port))
 	if err != nil {
 		return nil, err
 	}
 
-	// Build Host using modern libp2p options
+	// Setup UDP/QUIC listen address for superior NAT hole punching
+	quicMultiAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", port))
+	if err != nil {
+		return nil, err
+	}
+
+	// Build Host using modern libp2p options with robust NAT-Traversal parameters
 	return libp2p.New(
-		libp2p.ListenAddrs(sourceMultiAddr),
+		libp2p.ListenAddrs(sourceMultiAddr, quicMultiAddr),
 		// Use modern Security layer (Noise is default in go-libp2p)
 		libp2p.DefaultSecurity,
 		// Multiplexers: Yamux or Mplex
 		libp2p.DefaultMuxers,
 		libp2p.DefaultTransports,
+		// UPnP & NAT-PMP active port forwarding
+		libp2p.NATPortMap(),
+		// Enable Circuit Relay v2 clients to connect/relay via static public routers
+		libp2p.EnableRelay(),
+		// Enable decentralized Direct Connection Utility for NAT Hole Punching (DCUtR) 
+		libp2p.EnableHolePunching(),
 	)
 }
 
 // Set up DHT Routing for rendezvous lookup
 func setupDHT(ctx context.Context, h host.Host, bootstrapPeers []string) (*dht.IpfsDHT, error) {
-	// Start DHT in active Server mode (or Client mode if behind NAT)
-	kademliaDHT, err := dht.New(ctx, h, dht.Mode(dht.ModeServer))
+	// ModeAuto automatically determines whether to run as a DHT Server (public IP) or DHT Client (NAT)
+	kademliaDHT, err := dht.New(ctx, h, dht.Mode(dht.ModeAuto))
 	if err != nil {
 		return nil, err
 	}
