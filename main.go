@@ -168,15 +168,13 @@ func parseFlags() *Config {
 
 	flag.Parse()
 
-	bootstraps := []string{
-		// Default public test bootstrap peers (WSS & TCP on 443 & 4001)
-		"/dns4/bootstrap.libp2p.io/tcp/443/wss/p2p/QmNnooDu7bfj696X5A9JNd7Sj7dFi9WjOLN4Cms99E2IJg",
-		"/dns4/node0.preload.ipfs.io/tcp/443/wss/p2p/QmY7Yv7S75f1AGv9P89LscYvXWJ8rffy45PGL4G5k4U86r",
-		"/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvVWZkpYgj66YhC6P2Y7K6N21w99H6GdfjTMU71",
-		"/dns4/bootstrap.libp2p.io/tcp/4001/p2p/QmNnooDu7bfj696X5A9JNd7Sj7dFi9WjOLN4Cms99E2IJg",
-	}
+	var bootstraps []string
 	if *bootstrapRaw != "" {
 		bootstraps = strings.Split(*bootstrapRaw, ",")
+	} else {
+		for _, addr := range dht.DefaultBootstrapPeers {
+			bootstraps = append(bootstraps, addr.String())
+		}
 	}
 
 	var announceIPs []string
