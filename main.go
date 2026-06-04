@@ -157,8 +157,9 @@ func parseFlags() *Config {
 }
 
 // Helper to automatically query outbound local and public IPs without calling netlink InterfaceAddrs (which fails on Android/Termux)
-func getAutoIPs() []string {
-	var ips []string
+func getAutoIPs() (string, string) {
+	localIP := "127.0.0.1"
+	publicIP := ""
 
 	// 1. Get the local interface IP through a UDP dial (this doesn't send packets, just asks routing table for outbound interface IP)
 	conn, err := net.Dial("udp", "1.1.1.1:80")
@@ -167,7 +168,7 @@ func getAutoIPs() []string {
 			ipStr := localAddr.IP.String()
 			if ipStr != "127.0.0.1" && ipStr != "::1" && ipStr != "" {
 				fmt.Printf("[Programmatic Discovery] Automatically resolved local IP: %s\n", ipStr)
-				ips = append(ips, ipStr)
+				localIP = ipStr
 			}
 		}
 		conn.Close()
@@ -198,31 +199,52 @@ func getAutoIPs() []string {
 			ipStr := strings.TrimSpace(string(body))
 			if ipStr != "" && !strings.Contains(ipStr, " ") {
 				fmt.Printf("[Programmatic Discovery] Automatically resolved public IP: %s\n", ipStr)
-				ips = append(ips, ipStr)
+				publicIP = ipStr
 				break // Got a valid public address, done!
 			}
 		}
 	}
 
-	return ips
+	return localIP, publicIP
 }
 
 // Create a new libp2p Host listening on the specified port
 func makeHost(port int, announceIPs []string) (host.Host, error) {
-	// Setup TCP listen address
-	sourceMultiAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port))
-	if err != nil {
-		return nil, err
+	localIP, publicIP := getAutoIPs()
+
+	var listenAddrs []multiaddr.Multiaddr
+
+	// Always listen on localhost
+	maddrLocalTCP, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port))
+	if err == nil {
+		listenAddrs = append(listenAddrs, maddrLocalTCP)
+	}
+	maddrLocalQUIC, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/udp/%d/quic-v1", port))
+	if err == nil {
+		listenAddrs = append(listenAddrs, maddrLocalQUIC)
 	}
 
-	// Setup UDP/QUIC listen address for superior NAT hole punching
-	quicMultiAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", port))
-	if err != nil {
-		return nil, err
+	// Listen on dynamic programmatic local interface IP if resolved
+	if localIP != "127.0.0.1" && localIP != "" {
+		maddrIP4TCP, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", localIP, port))
+		if err == nil {
+			listenAddrs = append(listenAddrs, maddrIP4TCP)
+		}
+		maddrIP4QUIC, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", localIP, port))
+		if err == nil {
+			listenAddrs = append(listenAddrs, maddrIP4QUIC)
+		}
+	}
+
+	// Fallback to listening on 0.0.0.0 if for some reason we yielded no valid addresses
+	if len(listenAddrs) == 0 {
+		maddrTCPDefault, _ := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port))
+		maddrQUICDefault, _ := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", port))
+		listenAddrs = []multiaddr.Multiaddr{maddrTCPDefault, maddrQUICDefault}
 	}
 
 	opts := []libp2p.Option{
-		libp2p.ListenAddrs(sourceMultiAddr, quicMultiAddr),
+		libp2p.ListenAddrs(listenAddrs...),
 		// Use modern Security layer (Noise is default in go-libp2p)
 		libp2p.DefaultSecurity,
 		// Multiplexers: Yamux or Mplex
@@ -236,39 +258,63 @@ func makeHost(port int, announceIPs []string) (host.Host, error) {
 		libp2p.EnableHolePunching(),
 	}
 
-	// Combine manual announce IPs with programmatically discovered ones
-	autoIPs := getAutoIPs()
-	allAnnounceIPs := append(announceIPs, autoIPs...)
+	// Gather all announce addresses
+	var announceAddrs []multiaddr.Multiaddr
 
-	// Configure AnnounceAddrs to override netlink interface resolution failure on Android/Termux
-	if len(allAnnounceIPs) > 0 {
-		var announceAddrs []multiaddr.Multiaddr
-		for _, ip := range allAnnounceIPs {
-			ip = strings.TrimSpace(ip)
-			if ip == "" {
-				continue
+	// Include local IP and public IP
+	var allIPs []string
+	if localIP != "127.0.0.1" && localIP != "" {
+		allIPs = append(allIPs, localIP)
+	}
+	if publicIP != "" {
+		allIPs = append(allIPs, publicIP)
+	}
+	// Add manual ones if provided as flag overrides
+	for _, ip := range announceIPs {
+		ip = strings.TrimSpace(ip)
+		if ip != "" {
+			allIPs = append(allIPs, ip)
+		}
+	}
+
+	for _, ip := range allIPs {
+		if strings.HasPrefix(ip, "/") {
+			maddr, err := multiaddr.NewMultiaddr(ip)
+			if err == nil {
+				announceAddrs = append(announceAddrs, maddr)
 			}
-			// If it's already a multiaddress, parse it directly
-			if strings.HasPrefix(ip, "/") {
-				maddr, err := multiaddr.NewMultiaddr(ip)
-				if err == nil {
-					announceAddrs = append(announceAddrs, maddr)
-				}
-			} else {
-				// Otherwise, assume raw IP and build TCP and QUIC-v1 multiaddresses automatically
-				maddrTCP, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", ip, port))
-				if err == nil {
-					announceAddrs = append(announceAddrs, maddrTCP)
-				}
-				maddrQUIC, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, port))
-				if err == nil {
-					announceAddrs = append(announceAddrs, maddrQUIC)
-				}
+		} else {
+			maddrTCP, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", ip, port))
+			if err == nil {
+				announceAddrs = append(announceAddrs, maddrTCP)
+			}
+			maddrQUIC, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, port))
+			if err == nil {
+				announceAddrs = append(announceAddrs, maddrQUIC)
 			}
 		}
-		if len(announceAddrs) > 0 {
-			opts = append(opts, libp2p.AnnounceAddrs(announceAddrs...))
-		}
+	}
+
+	if len(announceAddrs) > 0 {
+		// Use AddrsFactory to yield standard listen addresses AND public/announced addresses!
+		opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+			// Combine our listen addresses with the resolved manual or public announce addresses
+			merged := make([]multiaddr.Multiaddr, 0, len(addrs)+len(announceAddrs))
+			merged = append(merged, addrs...)
+
+			// De-duplicate addresses
+			seen := make(map[string]bool)
+			for _, addr := range addrs {
+				seen[addr.String()] = true
+			}
+			for _, maddr := range announceAddrs {
+				if !seen[maddr.String()] {
+					merged = append(merged, maddr)
+					seen[maddr.String()] = true
+				}
+			}
+			return merged
+		}))
 	}
 
 	return libp2p.New(opts...)
