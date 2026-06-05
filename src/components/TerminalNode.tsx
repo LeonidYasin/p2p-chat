@@ -7,6 +7,7 @@ interface TerminalNodeProps {
   onInputChange: (nodeId: string, value: string) => void;
   onSubmitCommand: (nodeId: string, input: string) => void;
   onTogglePower: (nodeId: string) => void;
+  onPasteLogs?: (nodeId: string, text: string) => void;
   peerCount: number;
 }
 
@@ -15,10 +16,67 @@ export default function TerminalNode({
   onInputChange,
   onSubmitCommand,
   onTogglePower,
+  onPasteLogs,
   peerCount,
 }: TerminalNodeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeSeconds, setActiveSeconds] = useState(0);
+  const [pasteText, setPasteText] = useState('');
+
+  const handleParseLogs = () => {
+    if (onPasteLogs && pasteText.trim()) {
+      onPasteLogs(node.id, pasteText);
+      setPasteText('');
+    }
+  };
+
+  const handleLoadSample = () => {
+    let sample = '';
+    if (node.id === 'node-a') {
+      sample = `[*] Starting Peer-to-Peer node as "WinUser"...
+[+] Created libp2p Host successfully on port 3001.
+[+] Peer ID: 12D3KooWH91bNnPomJvaUs5vQSbsvG3PZNfRTWcy1XgtG6m7nqeS
+[+] Listening Addresses:
+    /ip4/127.0.0.1/tcp/3001/p2p/12D3KooWH91bNnPomJvaUs5vQSbsvG3PZNfRTWcy1XgtG6m7nqeS
+    /ip4/192.168.1.15/tcp/3001/p2p/12D3KooWH91bNnPomJvaUs5vQSbsvG3PZNfRTWcy1XgtG6m7nqeS
+[DHT: 📡 Advertising] Registering node in room "chat-with-rendezvous" on the global Kad-DHT...
+[Поиск: 📡 Активный сканирование / Search: 📡 Crawling DHT] Комната / Room: "chat-with-rendezvous"
+   📶 Активные узлы DHT / Routing links: 42 | Размер таблицы / RT Size: 120 🟢
+   🔍 Сканируем глобальный DHT-индекс на наличие собеседников... / Looking for active candidates...
+[Поиск: 📡 Поиск завершен / Search: 📡 Crawl Done] 0 других собеседников найдено на текущем цикле в комнате "chat-with-rendezvous".`;
+    } else if (node.id === 'node-b') {
+      sample = `[*] Starting Peer-to-Peer node as "PhoneUser"...
+[+] Created libp2p Host successfully on port 3002.
+[+] Peer ID: 12D3KooWMZkqQ4ZaKwHqkMTQF1NP4TwTen1fJZgrCUhKY3Ncsmzu
+[+] Listening Addresses:
+    /ip4/127.0.0.1/tcp/3002/p2p/12D3KooWMZkqQ4ZaKwHqkMTQF1NP4TwTen1fJZgrCUhKY3Ncsmzu
+    /ip4/198.18.0.1/tcp/3002/p2p/12D3KooWMZkqQ4ZaKwHqkMTQF1NP4TwTen1fJZgrCUhKY3Ncsmzu
+[DHT: 📡 Advertising] Registering node in room "chat-with-rendezvous" on the global Kad-DHT...
+[Search: 📡 Querying DHT] Room: "chat-with-rendezvous" | Live network links: 72 | RT size: 156. Actively crawling Kad-DHT indices...
+[Search: ✨ Discovered] Found candidate peer ID <peer.ID 12*bK43SJ> in room "chat-with-rendezvous"! Pitching secure link...
+[Search: ⚠️ Handshake fail] Link to <peer.ID 12*bK43SJ> refused/timed out: failed to dial: failed to dial 12D3KooWNzeGc8bCdg5xDkkzPPFfHTfhayvz6dmVChWb9dbK43SJ: all dials failed
+   * [/ip4/127.0.0.1/udp/3002/quic-v1] dial backoff
+   * [/ip4/159.195.66.195/udp/3002/quic-v1] dial backoff
+   * [/ip4/127.0.0.1/tcp/3002] dial backoff
+   * [/ip4/198.18.0.1/udp/3002/quic-v1] dial backoff
+   * [/ip4/159.195.66.195/tcp/3002] dial backoff
+   * [/ip4/198.18.0.1/tcp/3002] dial backoff (DCUtR hole punching or Circuit Relay v2 will try again shortly)
+[Search: ✨ Discovered] Found candidate peer ID <peer.ID 12*Ncsmzu> in room "chat-with-rendezvous"! Pitching secure link...
+[Search: ⚠️ Handshake fail] Link to <peer.ID 12*Ncsmzu> refused/timed out: failed to dial: failed to dial 12D3KooWMZkqQ4ZaKwHqkMTQF1NP4TwTen1fJZgrCUhKY3Ncsmzu: all dials failed
+   * [/ip4/127.0.0.1/udp/3002/quic-v1] CRYPTO_ERROR 0x12a (local): peer id mismatch: expected 12D3KooWMZkqQ4ZaKwHqkMTQF1NP4TwTen1fJZgrCUhKY3Ncsmzu, but remote key matches 12D3KooWH91bNnPomJvaUs5vQSbsvG3PZNfRTWcy1XgtG6m7nqeS
+   * [/ip4/198.18.0.1/udp/3002/quic-v1] CRYPTO_ERROR 0x12a (local): peer id mismatch: expected 12D3KooWMZkqQ4ZaKwHqkMTQF1NP4TwTen1fJZgrCUhKY3Ncsmzu, but remote key matches 12D3KooWH91bNnPomJvaUs5vQSbsvG3PZNfRTWcy1XgtG6m7nqeS
+   * [/ip4/127.0.0.1/tcp/3002] failed to negotiate security protocol: failed client selection; identical nonces
+   * [/ip4/198.18.0.1/tcp/3002] failed to negotiate security protocol: peer id mismatch: expected 12D3KooWMZkqQ4ZaKwHqkMTQF1NP4TwTen1fJZgrCUhKY3Ncsmzu, but remote key matches 12D3KooWH91bNnPomJvaUs5vQSbsvG3PZNfRTWcy1XgtG6m7nqeS (DCUtR hole punching or Circuit Relay v2 will try again shortly)`;
+    } else {
+      sample = `[*] Starting Peer-to-Peer Bootstrap node...
+[+] Host live on public port 4001.
+[+] Peer ID: QmNnoJiY7Q3WknFpxtUB447fNGL97ytDGdzZoxeT38xCCC
+[DHT] Kademlia active dht engine boot loaded. Waiting for peers...`;
+    }
+    if (onPasteLogs) {
+      onPasteLogs(node.id, sample);
+    }
+  };
 
   useEffect(() => {
     if (!node.isOnline) {
@@ -278,15 +336,42 @@ Export Date Timestamp  : ${new Date().toISOString()}
         ref={scrollRef}
         className="flex-1 mt-0.5 p-3.5 overflow-y-auto space-y-1 font-mono text-xs select-text leading-relaxed tracking-wider min-h-48 max-h-72 text-[#E0E0E0]"
       >
-        {!node.isOnline ? (
-          <div className="flex flex-col items-center justify-center h-full py-4 space-y-2.5 text-center select-none font-mono">
-            <p className="text-[#6B7280] text-[11px]">Go program process suspended</p>
-            <button
-              onClick={() => onTogglePower(node.id)}
-              className="py-1.5 px-3 bg-[#12141C] border border-[#1E212B] hover:border-[#00FF41] hover:text-[#00FF41] text-[#9CA3AF] font-bold font-mono rounded text-[10px] uppercase cursor-pointer transition-all duration-150 shadow-[0_0_12px_rgba(0,0,0,0.2)]"
-            >
-              go run main.go -nick {node.nickname}
-            </button>
+        {!node.isOnline || node.logs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full p-4 text-center select-none font-mono">
+            <p className="text-[#6B7280] text-[10px] uppercase tracking-wider mb-1.5 font-bold flex items-center gap-1.5 justify-center">
+              <Shield className="w-4 h-4 text-slate-500" />
+              <span>Импорт логов узла / Log Import ({node.id === 'node-a' ? 'Win' : node.id === 'node-b' ? 'Android' : 'Relay'})</span>
+            </p>
+            <p className="text-[10px] text-[#9CA3AF] max-w-sm mb-3 leading-relaxed">
+              Скопируйте вывод терминала `./p2pchat` и вставьте его ниже для автоматического разбора сетевого графа и выявления NAT-препятствий.
+            </p>
+            
+            <textarea
+              placeholder="Вставьте лог терминала (Paste go-libp2p console log line history here)..."
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              className="w-full max-w-md h-24 bg-[#07080D] border border-[#1E212B] rounded p-2 text-[10px] text-[#00FF41] focus:outline-none focus:border-[#00FF41]/40 tracking-tight font-mono resize-none leading-snug placeholder:text-slate-600 mb-3 select-text"
+            />
+            
+            <div className="flex flex-wrap gap-2 justify-center max-w-sm">
+              <button
+                onClick={handleParseLogs}
+                disabled={!pasteText.trim()}
+                className={`py-1 px-3 rounded text-[10px] uppercase cursor-pointer transition-all border font-bold font-mono ${
+                  pasteText.trim()
+                    ? 'bg-[#00FF41]/10 border-[#00FF41]/30 hover:bg-[#00FF41]/25 text-[#00FF41]'
+                    : 'bg-slate-800/30 text-slate-600 border-transparent cursor-not-allowed'
+                }`}
+              >
+                Разобрать логи / Parse Logs
+              </button>
+              <button
+                onClick={handleLoadSample}
+                className="py-1 px-3 bg-[#F27D26]/10 border border-[#F27D26]/30 hover:bg-[#F27D26]/25 text-[#F27D26] font-bold font-mono rounded text-[10px] uppercase cursor-pointer transition-all"
+              >
+                Загрузить пример ({node.id === 'node-a' ? 'Windows' : node.id === 'node-b' ? 'Android' : 'Relay'})
+              </button>
+            </div>
           </div>
         ) : (
           <>

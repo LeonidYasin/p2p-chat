@@ -6,64 +6,152 @@ import CodeViewer from './components/CodeViewer';
 import ArchitectureGuide from './components/ArchitectureGuide';
 import { Radio, RefreshCw, Zap, Laptop, Network, HelpCircle, Code2, AlertTriangle, FileSpreadsheet } from 'lucide-react';
 
+function defaultIdSeed(nickname: string) {
+  if (nickname.toLowerCase().includes('win')) return 'Yy6Zbt9W37knFixtUB487fNGL97ytDGdzZoxeT38xA4A';
+  if (nickname.toLowerCase().includes('phone') || nickname.toLowerCase().includes('android')) return 'Xz9Yae7R3WknFpxtUB999fNGL11ytDGdzZoxeT32xZ2B';
+  return 'W88Pqr2W37knFixtUB487fNGL97ytDGdzZoxeT38xCCC';
+}
+
+function parseGoLogs(rawLogs: string, nodeId: string, currentNick: string, currentPort: number) {
+  const lines = rawLogs.split('\n');
+  let nickname = currentNick;
+  let peerId = '';
+  let port = currentPort;
+  let isOnline = false;
+  let rendezvous = 'chat-with-rendezvous';
+  const parsedLogs: NetworkLog[] = [];
+  let discoveryState: 'offline' | 'bootstrapping' | 'querying_dht' | 'searching_room' | 'connected' = 'offline';
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    isOnline = true;
+
+    // Get time or make one
+    let timestamp = '';
+    const d = new Date();
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    let defaultTime = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    
+    // Check if the line has a standard log prefix or timestamp like 10:48:10
+    const logTimeMatch = trimmed.match(/^\[?(\d{2}:\d{2}:\d{2})\]?/);
+    if (logTimeMatch) {
+      timestamp = logTimeMatch[1];
+    } else {
+      timestamp = defaultTime;
+    }
+
+    let message = trimmed;
+    if (logTimeMatch) {
+      message = trimmed.slice(logTimeMatch[0].length).trim();
+    }
+
+    // Determine type
+    let logType: NetworkLog['type'] = 'system';
+    if (message.includes('fail') || message.includes('mismatch') || message.includes('refused') || message.includes('timed out') || message.includes('Error') || message.includes('dials failed') || message.includes('dial backoff')) {
+      logType = 'error';
+    } else if (message.includes('Discovered') || message.includes('local peer') || message.includes('mDNS') || message.includes('UDP')) {
+      logType = 'discovery';
+    } else if (message.includes('CONNECTED') || message.includes('established') || message.includes('stream') || message.includes('shook hands') || message.includes('Success')) {
+      logType = 'stream';
+    } else if (message.includes('Me:') || (message.match(/^[a-zA-Z0-9_\-]+:\s.+/) && !message.includes('[') && !message.includes(']'))) {
+      logType = 'chat';
+    }
+
+    // Matches
+    const nickMatch = message.match(/Starting Peer-to-Peer node as "([^"]+)"|Starting.*as "([^"]+)"/i);
+    if (nickMatch) {
+      nickname = nickMatch[1] || nickMatch[2];
+    }
+
+    const peerIdMatch = message.match(/Peer ID\s*[:=]?\s*([a-zA-Z0-9]{30,60})|failed to dial\s+([a-zA-Z0-9]{30,60})|expected\s+([a-zA-Z0-9]{30,60})|remote key matches\s+([a-zA-Z0-9]{30,60})/);
+    if (peerIdMatch) {
+      peerId = peerIdMatch[1] || peerIdMatch[2] || peerIdMatch[3] || peerIdMatch[4];
+    }
+
+    const portMatch = message.match(/port\s+(\d+)|tcp\/(\d+)|udp\/(\d+)/i);
+    if (portMatch) {
+      port = parseInt(portMatch[1] || portMatch[2] || portMatch[3], 10);
+    }
+
+    const roomMatch = message.match(/Room:\s*"([^"]+)"|rendezvous room:\s*"([^"]+)"|searching.*: "([^"]+)"|room "([^"]+)"/i);
+    if (roomMatch) {
+      rendezvous = roomMatch[1] || roomMatch[2] || roomMatch[3] || roomMatch[4];
+    }
+
+    // State machine updates based on log milestones
+    if (message.match(/Starting|setting up|Waiting/i)) {
+      discoveryState = 'bootstrapping';
+    } else if (message.match(/DHT Connected|Routing|RT Size/i)) {
+      discoveryState = 'querying_dht';
+    } else if (message.match(/Crawling|crawling|searching|looking for/i)) {
+      discoveryState = 'searching_room';
+    } else if (message.match(/CONNECTED|established|Upgraded/i)) {
+      discoveryState = 'connected';
+    }
+
+    parsedLogs.push({
+      id: `${nodeId}-parsed-${index}-${Date.now()}`,
+      timestamp,
+      type: logType,
+      message
+    });
+  });
+
+  return {
+    nickname,
+    peerId: peerId || `Qm${defaultIdSeed(nickname)}`,
+    port,
+    isOnline,
+    rendezvous,
+    logs: parsedLogs,
+    discoveryState: isOnline ? (discoveryState === 'offline' ? 'searching_room' : discoveryState) : 'offline'
+  };
+}
+
 export default function App() {
   const [rendezvousRoom, setRendezvousRoom] = useState<string>('chat-with-rendezvous');
   const [latencyMs, setLatencyMs] = useState<number>(45);
   const [activeMessage, setActiveMessage] = useState<{ from: string; to: string; content: string } | null>(null);
 
-  // Initialize simulated peers
+  // Initialize nodes to waiting/offline state - real physical nodes
   const [nodes, setNodes] = useState<P2PNode[]>([
     {
       id: 'node-a',
       peerId: 'QmYy6Zbt9W37knFixtUB487fNGL97ytDGdzZoxeT38xA4A',
-      nickname: 'Alice',
+      nickname: 'Device #1 (Windows PC)',
       port: 3001,
       bootstrapMode: false,
-      isOnline: true,
+      isOnline: false,
       rendezvous: 'chat-with-rendezvous',
-      peers: ['node-b'],
-      logs: [
-        { id: 'a1', timestamp: '10:48:10', type: 'system', message: '[*] Starting Peer-to-Peer node as "Alice"...' },
-        { id: 'a2', timestamp: '10:48:11', type: 'system', message: '[+] Created libp2p Host successfully on port 3001.' },
-        { id: 'a3', timestamp: '10:48:11', type: 'system', message: '[+] Peer ID: QmYy6Zbt9W37knFixtUB487fNGL97ytDGdzZoxeT38xA4A' },
-        { id: 'a4', timestamp: '10:48:11', type: 'system', message: '[+] Multiaddress: /ip4/127.0.0.1/tcp/3001/p2p/QmYy6Zbt...' },
-        { id: 'a5', timestamp: '10:48:12', type: 'discovery', message: '[mDNS] Discovered local peer Bob (:3002). Attempting secure handshake...' },
-        { id: 'a6', timestamp: '10:48:12', type: 'stream', message: '[Stream] Yamux protocol stream established on /libp2p/chat/1.0.0' },
-        { id: 'a7', timestamp: '10:48:12', type: 'system', message: '[+] Connected! Use command shell below to test streaming.' }
-      ],
+      peers: [],
+      logs: [],
       chatHistory: [],
       currentInput: '',
-      discoveryState: 'connected'
+      discoveryState: 'offline'
     },
     {
       id: 'node-b',
       peerId: 'QmXz9Yae7R3WknFpxtUB999fNGL11ytDGdzZoxeT32xZ2B',
-      nickname: 'Bob',
+      nickname: 'Device #2 (Android/Phone)',
       port: 3002,
       bootstrapMode: false,
-      isOnline: true,
+      isOnline: false,
       rendezvous: 'chat-with-rendezvous',
-      peers: ['node-a'],
-      logs: [
-        { id: 'b1', timestamp: '10:48:11', type: 'system', message: '[*] Starting Peer-to-Peer node as "Bob"...' },
-        { id: 'b2', timestamp: '10:48:11', type: 'system', message: '[+] Created libp2p Host successfully on port 3002.' },
-        { id: 'b3', timestamp: '10:48:11', type: 'system', message: '[+] Peer ID: QmXz9Yae7R3WknFpxtUB999fNGL11ytDGdzZoxeT32xZ2B' },
-        { id: 'b4', timestamp: '10:48:11', type: 'system', message: '[+] Multiaddress: /ip4/127.0.0.1/tcp/3002/p2p/QmXz9Ya...' },
-        { id: 'b5', timestamp: '10:48:12', type: 'discovery', message: '[mDNS] Discovered local peer Alice (:3001). Handshaking Noise credentials...' },
-        { id: 'b6', timestamp: '10:48:12', type: 'stream', message: '[Stream] Opened incoming stream /libp2p/chat/1.0.0' },
-        { id: 'b7', timestamp: '10:48:12', type: 'system', message: '[+] Peer link verified. Shell is active!' }
-      ],
+      peers: [],
+      logs: [],
       chatHistory: [],
       currentInput: '',
-      discoveryState: 'connected'
+      discoveryState: 'offline'
     },
     {
       id: 'node-c',
       peerId: 'QmW88Pqr2W37knFixtUB487fNGL97ytDGdzZoxeT38xCCC',
-      nickname: 'Charlie',
-      port: 3003,
-      bootstrapMode: false,
-      isOnline: false, // Charlie starts offline so users can power him up!
+      nickname: 'Device #3 (Bootstrap Relay)',
+      port: 4001,
+      bootstrapMode: true,
+      isOnline: false,
       rendezvous: 'chat-with-rendezvous',
       peers: [],
       logs: [],
@@ -95,223 +183,119 @@ export default function App() {
     );
   };
 
-  // Turn node on/off simulated engine
+  // Log Paste Handler - processes and parses the uploaded/pasted lines
+  const handlePasteLogs = (nodeId: string, rawText: string) => {
+    setNodes((prev) =>
+      prev.map((n) => {
+        if (n.id === nodeId) {
+          const defaultNick = n.id === 'node-a' ? 'WinUser' : n.id === 'node-b' ? 'PhoneUser' : 'BootstrapNode';
+          const defaultPort = n.port;
+          const parsed = parseGoLogs(rawText, nodeId, defaultNick, defaultPort);
+          return {
+            ...n,
+            isOnline: true,
+            nickname: parsed.nickname,
+            peerId: parsed.peerId,
+            port: parsed.port,
+            rendezvous: parsed.rendezvous,
+            logs: parsed.logs,
+            discoveryState: parsed.discoveryState,
+            peers: [] // will be dynamically linked reactively
+          };
+        }
+        return n;
+      })
+    );
+  };
+
+  // Toggle node power physically
   const handleTogglePower = (nodeId: string) => {
     setNodes((prev) =>
       prev.map((n) => {
         if (n.id === nodeId) {
           const nextState = !n.isOnline;
-          if (nextState) {
-            // Turning online logs initialization steps
-            return {
-              ...n,
-              isOnline: true,
-              peers: [],
-              discoveryState: 'bootstrapping',
-              logs: [
-                { id: `sys-1-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[*] Starting Peer-to-Peer node as "${n.nickname}"...` },
-                { id: `sys-2-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Created libp2p Host successfully on port ${n.port}.` },
-                { id: `sys-3-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Peer ID: ${n.peerId}` },
-                { id: `sys-4-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Multiaddress: /ip4/127.0.0.1/tcp/${n.port}/p2p/${n.peerId.slice(0, 10)}...` },
-                { id: `sys-5-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `\n[Поиск: 📡 Ожидание / Search: 📡 Waiting] Комната / Room: "${rendezvousRoom}"` },
-                { id: `sys-6-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `   📶 Подключение к DHT бутстрап-серверам: 0 🔴` },
-                { id: `sys-7-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `   💡 [P2P Справка]: Первичное подключение к DHT-сети обычно занимает от 5 до 15 секунд.` },
-                { id: `sys-8-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `      Убедитесь, что интернет активен (Wi-Fi или сотовая связь).` },
-                { id: `sys-9-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `   💡 [P2P Info]: Initial DHT boot strap takes 5-15s. Checking internet...\n` }
-              ]
-            };
-          } else {
-            // Leaving logs offline
-            return {
-              ...n,
-              isOnline: false,
-              peers: [],
-              discoveryState: 'offline',
-              logs: []
-            };
-          }
+          return {
+            ...n,
+            isOnline: nextState,
+            logs: [],
+            peers: [],
+            discoveryState: 'offline'
+          };
         }
         return n;
       })
     );
-
-    // If turned online, queue dynamic step transitions representing real-world timing
-    const sourceNode = nodes.find((n) => n.id === nodeId);
-    if (sourceNode && !sourceNode.isOnline) {
-      setTimeout(() => {
-        setNodes((curr) =>
-          curr.map((cn) =>
-            cn.id === nodeId && cn.isOnline && cn.peers.length === 0
-              ? { ...cn, discoveryState: 'querying_dht' }
-              : cn
-          )
-        );
-        appendNodeLog(nodeId, 'system', `[Поиск: 📡 Сеть активна / Search: 📡 DHT Connected] Комната / Room: "${rendezvousRoom}"`);
-        appendNodeLog(nodeId, 'system', `   📶 Соединение с DHT: Установлено (1 бутстрапов) 🟢`);
-        appendNodeLog(nodeId, 'system', `   📊 Сборка таблицы маршрутизации Kademlia (Размер RT: 0) 🔄`);
-        appendNodeLog(nodeId, 'system', `   💡 [P2P Справка]: Строим таблицы маршрутизации и скачиваем индексы комнаты. Это занимает ~10-25 секунд.`);
-        appendNodeLog(nodeId, 'system', `      На Android / Termux это может идти чуть дольше из-за ограничений ОС.`);
-        appendNodeLog(nodeId, 'system', `   💡 [P2P Info]: Building Kademlia routing tables. Downloading indexes (10-25s)...\n`);
-      }, 1500);
-
-      setTimeout(() => {
-        setNodes((curr) =>
-          curr.map((cn) =>
-            cn.id === nodeId && cn.isOnline && cn.peers.length === 0
-              ? { ...cn, discoveryState: 'searching_room' }
-              : cn
-          )
-        );
-        appendNodeLog(nodeId, 'system', `[Поиск: 📡 Активный сканирование / Search: 📡 Crawling DHT] Комната / Room: "${rendezvousRoom}"`);
-        appendNodeLog(nodeId, 'system', `   📶 Активные узлы DHT / Routing links: 2 | Размер таблицы / RT Size: 3 🟢`);
-        appendNodeLog(nodeId, 'system', `   🔍 Сканируем глобальный DHT-индекс на наличие собеседников... / Looking for active candidates...\n`);
-      }, 3500);
-
-      // Simulate a realistic Peer Discovered + NAT CGNAT warning + eventual Relay Hole punch fallback
-      setTimeout(() => {
-        setNodes((curr) => {
-          const onlinePeers = curr.filter((oth) => oth.id !== nodeId && oth.isOnline);
-          if (onlinePeers.length === 0) {
-            appendNodeLog(nodeId, 'system', `[Поиск: 📡 Поиск завершен / Search: 📡 Crawl Done] 0 других собеседников найдено на текущем цикле в комнате "${rendezvousRoom}".`);
-            appendNodeLog(nodeId, 'system', `   💡 (Поиск повторяется каждые 15 сек. Держите приложение запущенным. Проверьте правильность названия комнаты у обоих пиров!)\n`);
-            return curr;
-          }
-
-          const targetPeer = onlinePeers[0];
-          appendNodeLog(nodeId, 'discovery', `[Поиск: ✨ Пир обнаружен / Search: ✨ Peer Discovered] Ник/ID: "${targetPeer.nickname}" (ID: Qm${targetPeer.peerId.slice(0, 8)}...) в комнате "${rendezvousRoom}"!`);
-          appendNodeLog(nodeId, 'system', `   🔗 [1/2] Начинаем установку защищенного соединения (Noise / Handshake)... / Starting handshake...`);
-
-          setTimeout(() => {
-            appendNodeLog(nodeId, 'error', `[Search: ⚠️ NAT Obstacle] Узел ${targetPeer.nickname} зарегистрирован в DHT, но прямое подключение отклонено: Препятствие NAT`);
-            appendNodeLog(nodeId, 'system', `   💡 [Почему это происходит? / NAT Explanation]:`);
-            appendNodeLog(nodeId, 'system', `      - На WINDOWS: Wi-Fi роутеры чаще всего Full Cone / Restricted NAT (порты легко пробиваются).`);
-            appendNodeLog(nodeId, 'system', `      - На ANDROID (Termux): Мобильный интернет (4G/5G) использует жесткий CGNAT (Carrier-Grade NAT) оператора.`);
-            appendNodeLog(nodeId, 'system', `      - Напрямую такие устройства соединиться не могут. Сеть libp2p сейчас автоматически пытается пробить NAT`);
-            appendNodeLog(nodeId, 'system', `        с помощью протокола Hole Punching (DCUtR) или перенаправляет трафик через публичные реле-ноды (Relay v2).`);
-            appendNodeLog(nodeId, 'system', `      💡 ПОЖАЛУЙСТА, НЕ ЗАКРЫВАЙТЕ приложение! Процесс децентрализованного пробития NAT и ретрансляции идет непрерывно.\n`);
-
-            setTimeout(() => {
-              appendNodeLog(nodeId, 'stream', `[Search: 🎉 CONNECTED] Успешное соединение! Полный рукопожатие завершено с пиром ${targetPeer.nickname}! Прямой чат-канал настроен.\n`);
-              
-              // Transition both into connected status
-              setNodes((nowNodes) =>
-                nowNodes.map((nowN) => {
-                  if (nowN.id === nodeId && !nowN.peers.includes(targetPeer.id)) {
-                    return { ...nowN, peers: [...nowN.peers, targetPeer.id], discoveryState: 'connected' };
-                  }
-                  if (nowN.id === targetPeer.id && !nowN.peers.includes(nodeId)) {
-                    return { ...nowN, peers: [...nowN.peers, nodeId], discoveryState: 'connected' };
-                  }
-                  return nowN;
-                })
-              );
-            }, 3000);
-          }, 1500);
-
-          return curr;
-        });
-      }, 5000);
-    }
   };
 
-  // Discovery engine: checks who is online and coordinates links based on Room value
-  const triggerPeerDiscovery = () => {
-    setNodes((prev) => {
-      const onlineNodes = prev.filter((n) => n.isOnline);
-      if (onlineNodes.length <= 1) return prev;
+  // Dynamically resolve links and connections between nodes by scanning parsed log texts
+  useEffect(() => {
+    setNodes((currNodes) => {
+      let changed = false;
 
-      return prev.map((n) => {
-        if (!n.isOnline) return n;
+      const nextNodes = currNodes.map((node) => {
+        if (!node.isOnline) {
+          if (node.peers.length > 0) {
+            changed = true;
+            return { ...node, peers: [] };
+          }
+          return node;
+        }
 
-        // Find matches which: are online, share same Room, excluding self
-        const peerIdsMatched = onlineNodes
-          .filter((oth) => oth.id !== n.id && oth.rendezvous === rendezvousRoom)
-          .map((oth) => oth.id);
+        const discoveredPeersSet = new Set<string>();
+        node.logs.forEach((log) => {
+          const msg = log.message;
 
-        // Figure out new peers that were not in old list
-        const newlyDiscovered = peerIdsMatched.filter((pId) => !n.peers.includes(pId));
+          currNodes.forEach((otherNode) => {
+            if (otherNode.id === node.id || !otherNode.isOnline) return;
 
-        if (newlyDiscovered.length > 0) {
-          const addedLogs: NetworkLog[] = newlyDiscovered.flatMap((pId) => {
-            const peerObj = onlineNodes.find((on) => on.id === pId);
-            const shortPeerId = peerObj ? peerObj.peerId.slice(0, 8) : '';
-            return [
-              {
-                id: `disc-${Date.now()}-${pId}`,
-                timestamp: getTimestamp(),
-                type: 'discovery' as const,
-                message: `[Search: ✨ Discovered] Found candidate peer ID Qm${shortPeerId}... in room "${rendezvousRoom}"! Pitching secure link...`
-              },
-              {
-                id: `upg-${Date.now()}-${pId}`,
-                timestamp: getTimestamp(),
-                type: 'stream' as const,
-                message: `[Search: 🎉 CONNECTED] Fully connected to peer ${peerObj?.nickname}! Upgrading libp2p stream...`
+            const otherId = otherNode.peerId;
+            const otherShort = otherId.length > 10 ? otherId.slice(0, 10) : otherId;
+            const otherTail = otherId.length > 8 ? otherId.slice(otherId.length - 8) : otherId;
+            const nicknameLower = otherNode.nickname?.toLowerCase() || '';
+
+            const matchesOther = (otherId && msg.includes(otherId)) ||
+                                 (otherShort && msg.includes(otherShort)) ||
+                                 (otherTail && msg.includes(otherTail)) ||
+                                 (nicknameLower && msg.toLowerCase().includes(nicknameLower));
+
+            if (matchesOther) {
+              const hasConnectedMark = msg.includes('CONNECTED') || 
+                                       msg.includes('Established') ||
+                                       msg.includes('Yamux protocol stream established') || 
+                                       msg.includes('Opened incoming stream') || 
+                                       msg.includes('Fully connected') || 
+                                       msg.includes('Handshake successful') || 
+                                       msg.includes('shook hands');
+              if (hasConnectedMark) {
+                discoveredPeersSet.add(otherNode.id);
               }
-            ];
+            }
           });
+        });
 
+        const peersList = Array.from(discoveredPeersSet);
+        const listsEqual = node.peers.length === peersList.length && node.peers.every(p => peersList.includes(p));
+        
+        let calculatedState = node.discoveryState;
+        if (peersList.length > 0 && node.discoveryState !== 'connected') {
+          calculatedState = 'connected';
+        }
+
+        if (!listsEqual || node.discoveryState !== calculatedState) {
+          changed = true;
           return {
-            ...n,
-            peers: [...n.peers, ...newlyDiscovered],
-            discoveryState: 'connected',
-            logs: [...n.logs, ...addedLogs]
+            ...node,
+            peers: peersList,
+            discoveryState: calculatedState
           };
         }
 
-        return n;
+        return node;
       });
+
+      return changed ? nextNodes : currNodes;
     });
-  };
-
-  // Periodic mDNS/DHT discovery checker
-  useEffect(() => {
-    const discTicker = setInterval(() => {
-      triggerPeerDiscovery();
-    }, 4000);
-
-    return () => clearInterval(discTicker);
-  }, [rendezvousRoom]);
-
-  // Monitor room changes
-  useEffect(() => {
-    // Notify all online nodes that they are joining a new room
-    nodes.forEach((n) => {
-      if (n.isOnline) {
-        appendNodeLog(n.id, 'system', `[*] Leaving previous rendezvous room...`);
-        appendNodeLog(n.id, 'system', `[*] Advertised and searching rendezvous: "${rendezvousRoom}"...`);
-      }
-    });
-
-    // Reset peer connections matching old room
-    setNodes((prev) =>
-      prev.map((n) => {
-        if (!n.isOnline) return n;
-
-        // Schedule change of discoveryState to 'searching_room' shortly
-        setTimeout(() => {
-          setNodes((curr) =>
-            curr.map((cn) =>
-              cn.id === n.id && cn.isOnline && cn.peers.length === 0
-                ? { ...cn, discoveryState: 'searching_room' }
-                : cn
-            )
-          );
-        }, 1500);
-
-        return {
-          ...n,
-          rendezvous: rendezvousRoom,
-          peers: [], // clears peers to trigger fresh rendezvous handshakes
-          discoveryState: 'querying_dht'
-        };
-      })
-    );
-
-    setTimeout(() => {
-      triggerPeerDiscovery();
-    }, 1000);
-  }, [rendezvousRoom]);
+  }, [JSON.stringify(nodes.map(n => ({ id: n.id, isOnline: n.isOnline, logsCount: n.logs.length, peerId: n.peerId, nickname: n.nickname })))] );
 
   // Update input string in buffer
   const handleInputChange = (nodeId: string, value: string) => {
@@ -479,47 +463,37 @@ export default function App() {
       {
         id: 'node-a',
         peerId: 'QmYy6Zbt9W37knFixtUB487fNGL97ytDGdzZoxeT38xA4A',
-        nickname: 'Alice',
+        nickname: 'Device #1 (Windows PC)',
         port: 3001,
         bootstrapMode: false,
-        isOnline: true,
+        isOnline: false,
         rendezvous: 'chat-with-rendezvous',
-        peers: ['node-b'],
-        logs: [
-          { id: 'r1', timestamp: getTimestamp(), type: 'system', message: '[*] Node context reset. Starting Alice daemon...' },
-          { id: 'r2', timestamp: getTimestamp(), type: 'system', message: '[+] Host live on port 3001.' },
-          { id: 'r3', timestamp: getTimestamp(), type: 'discovery', message: '[mDNS] Multicast search active...' },
-          { id: 'r4', timestamp: getTimestamp(), type: 'system', message: '[+] Successfully connected to Bob!' }
-        ],
+        peers: [],
+        logs: [],
         chatHistory: [],
         currentInput: '',
-        discoveryState: 'connected'
+        discoveryState: 'offline'
       },
       {
         id: 'node-b',
         peerId: 'QmXz9Yae7R3WknFpxtUB999fNGL11ytDGdzZoxeT32xZ2B',
-        nickname: 'Bob',
+        nickname: 'Device #2 (Android/Phone)',
         port: 3002,
         bootstrapMode: false,
-        isOnline: true,
+        isOnline: false,
         rendezvous: 'chat-with-rendezvous',
-        peers: ['node-a'],
-        logs: [
-          { id: 'rb1', timestamp: getTimestamp(), type: 'system', message: '[*] Node context reset. Starting Bob daemon...' },
-          { id: 'rb2', timestamp: getTimestamp(), type: 'system', message: '[+] Host live on port 3002.' },
-          { id: 'rb3', timestamp: getTimestamp(), type: 'discovery', message: '[mDNS] Multicast search active...' },
-          { id: 'rb4', timestamp: getTimestamp(), type: 'system', message: '[+] Successfully connected to Alice!' }
-        ],
+        peers: [],
+        logs: [],
         chatHistory: [],
         currentInput: '',
-        discoveryState: 'connected'
+        discoveryState: 'offline'
       },
       {
         id: 'node-c',
         peerId: 'QmW88Pqr2W37knFixtUB487fNGL97ytDGdzZoxeT38xCCC',
-        nickname: 'Charlie',
-        port: 3003,
-        bootstrapMode: false,
+        nickname: 'Device #3 (Bootstrap Relay)',
+        port: 4001,
+        bootstrapMode: true,
         isOnline: false,
         rendezvous: 'chat-with-rendezvous',
         peers: [],
@@ -530,6 +504,97 @@ export default function App() {
       }
     ]);
   };
+
+  // Dynamically analyze logs and generate real troubleshooting action sheets
+  const diagnostics = React.useMemo(() => {
+    let hasMismatch = false;
+    let mismatchExpected = '';
+    let mismatchActual = '';
+    let hasNatObstacle = false;
+    let hasBootstrapConnection_a = false;
+    let hasBootstrapConnection_b = false;
+    let hasDialsFailed = false;
+
+    nodes.forEach(node => {
+      node.logs.forEach(log => {
+        const msg = log.message;
+        if (msg.includes('peer id mismatch')) {
+          hasMismatch = true;
+          const exp = msg.match(/expected\s+([a-zA-Z0-9]+)/);
+          const act = msg.match(/matches\s+([a-zA-Z0-9]+)/);
+          if (exp) mismatchExpected = exp[1];
+          if (act) mismatchActual = act[1];
+        }
+        if (msg.includes('NAT Obstacle') || msg.includes('dial backoff') || msg.includes('failed to dial') || msg.includes('CGNAT')) {
+          hasNatObstacle = true;
+        }
+        if (msg.includes('dials failed') || msg.includes('all dials failed') || msg.includes('refused/timed out')) {
+          hasDialsFailed = true;
+        }
+        if (msg.includes('Successfully connected') || msg.includes('Yamux protocol stream established') || msg.includes('shook hands')) {
+          if (node.id === 'node-a') hasBootstrapConnection_a = true;
+          if (node.id === 'node-b') hasBootstrapConnection_b = true;
+        }
+      });
+    });
+
+    const report: string[] = [];
+    const recommendations: { title: string; why: string; action: string }[] = [];
+
+    if (hasMismatch) {
+      report.push('⚠️ КРИТИЧЕСКАЯ ОШИБКА: Peer ID Mismatch');
+      recommendations.push({
+        title: '🔑 Несоответствие Peer ID (Критика)',
+        why: 'Узел Android ожидал конкретный Peer ID, но Windows-клиент сгенерировал другие ключи. Это блокирует Noise-шифрование.',
+        action: 'Сохраняйте закрытый ключ в файл при запуске, чтобы он не менялся. (Запуск: go run main.go -key peer.key)'
+      });
+    }
+
+    if (hasNatObstacle) {
+      report.push('⚠️ ПРЕПЯТСТВИЕ СЕТИ: Блокировка CGNAT');
+      recommendations.push({
+        title: '📡 CGNAT Изоляция (Android / 4G)',
+        why: 'Мобильный интернет (4G / Termux) находится под Carrier-Grade NAT. Входящие порты полностью заблокированы вашим оператором связи.',
+        action: 'Для их связи необходимы публичные ретрансляторы (Circuit Relay v2) или включение Hole Punching на обоих узлах.'
+      });
+    }
+
+    if (!hasMismatch && !hasNatObstacle && hasDialsFailed) {
+      report.push('⚠️ ОШИБКА СВЯЗИ: Все попытки дозвона завершились неудачей (All dials failed)');
+      recommendations.push({
+        title: '🧱 Сетевая Негосиация Отклонена',
+        why: 'Локальные брандмауэры или правила маршрутизатора Wi-Fi блокируют входящий порт 3002.',
+        action: 'Откройте порты в фаерволе, или поднимите VPN-туннель (WireGuard / Tailscale) между устройствами.'
+      });
+    }
+
+    if (nodes.every(n => n.logs.length === 0)) {
+      recommendations.push({
+        title: '📋 Ожидание логов...',
+        why: 'Сетевой анализатор готов к диагностике подсистемы.',
+        action: 'Запустите терминал в Termux/Windows и вставьте сырой вывод (console logs) в карточки справа.'
+      });
+    } else if (recommendations.length === 0) {
+      recommendations.push({
+        title: '✅ Анализ успешного соединения',
+        why: 'Логи не содержат известных сетевых ошибок или взаимных блокировок.',
+        action: 'Узлы работают в штатном децентрализованном режиме!'
+      });
+    }
+
+    const state_a = nodes[0].isOnline ? '🟢 Разобран' : '⚪ Нет логов';
+    const state_b = nodes[1].isOnline ? '🟢 Разобран' : '⚪ Нет логов';
+
+    return {
+      hasMismatch,
+      hasNatObstacle,
+      hasDialsFailed,
+      state_a,
+      state_b,
+      report,
+      recommendations
+    };
+  }, [nodes]);
 
   return (
     <div className="min-h-screen bg-[#0A0B10] text-[#E0E0E0] flex flex-col font-mono selection:bg-[#00FF41]/20 selection:text-white pb-12 antialiased">
@@ -618,14 +683,39 @@ export default function App() {
               activeMessageToSend={activeMessage}
             />
 
-            {/* Config controls card */}
+            {/* Config controls and Real diagnostics report */}
             <div className="bg-[#12141C] border border-[#1E212B] rounded-lg p-5 space-y-4">
               <h3 className="font-bold text-[#6B7280] text-[10px] tracking-widest uppercase border-b border-[#1E212B] pb-2">
-                Discovery configuration parameters
+                Сетевая Диагностика и Рекомендации
               </h3>
 
+              {/* Status board */}
+              <div className="grid grid-cols-2 gap-3 pb-1">
+                <div className="bg-[#07080D] p-2 border border-[#1E212B] rounded">
+                  <span className="text-[9px] text-[#6B7280] block uppercase font-bold">Device #1 Windows</span>
+                  <span className="font-mono text-[11px] font-bold text-white">{diagnostics.state_a}</span>
+                </div>
+                <div className="bg-[#07080D] p-2 border border-[#1E212B] rounded">
+                  <span className="text-[9px] text-[#6B7280] block uppercase font-bold">Device #2 Android</span>
+                  <span className="font-mono text-[11px] font-bold text-white">{diagnostics.state_b}</span>
+                </div>
+              </div>
+
+              {/* Warnings / Action sheet lists */}
+              <div className="space-y-3.5 pt-1">
+                {diagnostics.recommendations.map((rec, idx) => (
+                  <div key={idx} className="bg-[#07080D]/50 border-l-2 border-[#F27D26] p-2.5 space-y-1 rounded-r">
+                    <h4 className="text-[11px] font-bold text-white font-mono">{rec.title}</h4>
+                    <p className="text-[10px] text-[#9CA3AF] leading-relaxed">{rec.why}</p>
+                    <p className="text-[10px] text-[#00FF41] font-semibold leading-relaxed border-t border-[#1E212B]/40 pt-1.5 mt-1">
+                      👉 {rec.action}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
               {/* Rendezvous name input */}
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 pt-2 border-t border-[#1E212B]">
                 <label className="text-[10px] text-[#9CA3AF] uppercase font-bold block">
                   Rendezvous Namespace (DHT REGISTRY KEY)
                 </label>
@@ -639,27 +729,9 @@ export default function App() {
                   />
                   <span className="absolute right-3.5 top-3 w-2 h-2 rounded-full bg-[#00FF41] shadow-[0_0_6px_#00FF41]" />
                 </div>
-                <span className="text-[10px] text-[#6B7280] block leading-normal">
-                  Changing this key forces libp2p DHT advertiser loops to search a different namespace instantly.
+                <span className="text-[9px] text-[#6B7280] block leading-normal pt-1">
+                  Изменение этой комнаты заставляет Kad-DHT сканировать другой глобальный индекс пространства имен.
                 </span>
-              </div>
-
-              {/* Latency dialer range slider */}
-              <div className="space-y-1.5 pt-1">
-                <div className="flex justify-between items-center text-[10px]">
-                  <label className="text-[#9CA3AF] uppercase font-bold">
-                    Synthetic Substream Latency
-                  </label>
-                  <span className="font-mono text-[#F27D26] font-bold">{latencyMs} ms</span>
-                </div>
-                <input
-                  type="range"
-                  min="5"
-                  max="400"
-                  value={latencyMs}
-                  onChange={(e) => setLatencyMs(Number(e.target.value))}
-                  className="w-full h-1 bg-[#1E212B] rounded-lg appearance-none cursor-pointer accent-[#00FF41] focus:outline-none"
-                />
               </div>
             </div>
 
@@ -676,13 +748,14 @@ export default function App() {
               </span>
             </div>
 
-            {/* Primary Alice Console - large layout */}
+            {/* Primary Windows Console - large layout */}
             <div className="h-72">
               <TerminalNode
                 node={nodes[0]}
                 onInputChange={handleInputChange}
                 onSubmitCommand={handleSubmitCommand}
                 onTogglePower={handleTogglePower}
+                onPasteLogs={handlePasteLogs}
                 peerCount={nodes[0].peers.filter(pId => nodes.find(no => no.id === pId)?.isOnline).length}
               />
             </div>
@@ -695,6 +768,7 @@ export default function App() {
                   onInputChange={handleInputChange}
                   onSubmitCommand={handleSubmitCommand}
                   onTogglePower={handleTogglePower}
+                  onPasteLogs={handlePasteLogs}
                   peerCount={nodes[1].peers.filter(pId => nodes.find(no => no.id === pId)?.isOnline).length}
                 />
               </div>
@@ -704,6 +778,7 @@ export default function App() {
                   onInputChange={handleInputChange}
                   onSubmitCommand={handleSubmitCommand}
                   onTogglePower={handleTogglePower}
+                  onPasteLogs={handlePasteLogs}
                   peerCount={nodes[2].peers.filter(pId => nodes.find(no => no.id === pId)?.isOnline).length}
                 />
               </div>
