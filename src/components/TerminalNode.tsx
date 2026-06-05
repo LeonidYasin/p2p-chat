@@ -334,58 +334,98 @@ Export Date Timestamp  : ${new Date().toISOString()}
       {/* Internal interactive terminal console */}
       <div 
         ref={scrollRef}
-        className="flex-1 mt-0.5 p-3.5 overflow-y-auto space-y-1 font-mono text-xs select-text leading-relaxed tracking-wider min-h-48 max-h-72 text-[#E0E0E0]"
+        className="flex-1 mt-0.5 p-3.5 overflow-y-auto space-y-1 font-mono text-xs select-text leading-relaxed tracking-wider min-h-48 text-[#E0E0E0]"
       >
-        {!node.isOnline || node.logs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full p-4 text-center select-none font-mono">
-            <p className="text-[#6B7280] text-[10px] uppercase tracking-wider mb-1.5 font-bold flex items-center gap-1.5 justify-center">
-              <Shield className="w-4 h-4 text-slate-500" />
-              <span>Импорт логов узла / Log Import ({node.id === 'node-a' ? 'Win' : node.id === 'node-b' ? 'Android' : 'Relay'})</span>
-            </p>
-            <p className="text-[10px] text-[#9CA3AF] max-w-sm mb-3 leading-relaxed">
-              Скопируйте вывод терминала `./p2pchat` и вставьте его ниже для автоматического разбора сетевого графа и выявления NAT-препятствий.
-            </p>
-            
-            <textarea
-              placeholder="Вставьте лог терминала (Paste go-libp2p console log line history here)..."
-              value={pasteText}
-              onChange={(e) => setPasteText(e.target.value)}
-              className="w-full max-w-md h-24 bg-[#07080D] border border-[#1E212B] rounded p-2 text-[10px] text-[#00FF41] focus:outline-none focus:border-[#00FF41]/40 tracking-tight font-mono resize-none leading-snug placeholder:text-slate-600 mb-3 select-text"
-            />
-            
-            <div className="flex flex-wrap gap-2 justify-center max-w-sm">
+        {node.id === 'node-c' ? (
+          !node.isOnline ? (
+            <div className="flex flex-col items-center justify-center h-full p-4 text-center select-none font-mono">
+              <p className="text-[#FF4141] text-[10px] uppercase tracking-wider mb-2 font-bold flex items-center gap-1.5 justify-center">
+                <Power className="w-4 h-4 text-red-500 animate-pulse" />
+                <span>Бэкенд-Демон Остановлен / Daemon Suspended</span>
+              </p>
+              <p className="text-[11px] text-[#9CA3AF] max-w-sm mb-4 leading-relaxed">
+                Координационный bootstrap-узел (libp2p Relay v2 / Kademlia DHT Seed) выключен. Вы можете запустить его, кликнув по значку "Питание" на верхней панели, либо прямо здесь:
+              </p>
               <button
-                onClick={handleParseLogs}
-                disabled={!pasteText.trim()}
-                className={`py-1 px-3 rounded text-[10px] uppercase cursor-pointer transition-all border font-bold font-mono ${
-                  pasteText.trim()
-                    ? 'bg-[#00FF41]/10 border-[#00FF41]/30 hover:bg-[#00FF41]/25 text-[#00FF41]'
-                    : 'bg-slate-800/30 text-slate-600 border-transparent cursor-not-allowed'
-                }`}
+                onClick={() => onTogglePower('node-c')}
+                className="py-1.5 px-4 bg-[#00FF41]/10 border border-[#00FF41]/30 hover:bg-[#00FF41]/25 text-[#00FF41] font-bold font-mono rounded text-[10px] uppercase cursor-pointer transition-all flex items-center gap-1.5"
               >
-                Разобрать логи / Parse Logs
-              </button>
-              <button
-                onClick={handleLoadSample}
-                className="py-1 px-3 bg-[#F27D26]/10 border border-[#F27D26]/30 hover:bg-[#F27D26]/25 text-[#F27D26] font-bold font-mono rounded text-[10px] uppercase cursor-pointer transition-all"
-              >
-                Загрузить пример ({node.id === 'node-a' ? 'Windows' : node.id === 'node-b' ? 'Android' : 'Relay'})
+                <Power className="w-3.5 h-3.5" />
+                <span>Запустить Go-узел на сервере</span>
               </button>
             </div>
-          </div>
-        ) : (
-          <>
-            {node.logs.map((log) => (
-              <div key={log.id} className="flex flex-col">
-                <div className="flex items-start gap-1 w-full flex-wrap whitespace-pre-wrap">
-                  <span className="text-[#4B5563] shrink-0 text-[10px] select-none">{log.timestamp}</span>
-                  <span className={`${getLogColorClass(log.type, log.message)}`}>
-                    {log.message}
-                  </span>
+          ) : node.logs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full p-4 text-center select-none font-mono text-[#6B7280]">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#00FF41] mb-2" />
+              <p className="text-[10px] uppercase tracking-wider font-bold">Запуск процесса Go...</p>
+              <p className="text-[9px] mt-1 text-slate-500">Чтение буфера stdout/stderr из контейнера Cloud Run...</p>
+            </div>
+          ) : (
+            <>
+              {node.logs.map((log) => (
+                <div key={log.id} className="flex flex-col font-mono text-xs">
+                  <div className="flex items-start gap-1 w-full flex-wrap whitespace-pre-wrap">
+                    <span className="text-[#4B5563] shrink-0 text-[10px] select-none">{log.timestamp}</span>
+                    <span className={`${getLogColorClass(log.type, log.message)}`}>
+                      {log.message}
+                    </span>
+                  </div>
                 </div>
+              ))}
+            </>
+          )
+        ) : (
+          !node.isOnline || node.logs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full p-4 text-center select-none font-mono">
+              <p className="text-[#6B7280] text-[10px] uppercase tracking-wider mb-1.5 font-bold flex items-center gap-1.5 justify-center">
+                <Shield className="w-4 h-4 text-slate-500" />
+                <span>Импорт логов узла / Log Import ({node.id === 'node-a' ? 'Win' : 'Android'})</span>
+              </p>
+              <p className="text-[11px] text-[#9CA3AF] max-w-sm mb-3 leading-relaxed">
+                Скопируйте вывод терминала `./p2pchat` и вставьте его ниже для автоматического разбора сетевого графа и выявления NAT-препятствий.
+              </p>
+              
+              <textarea
+                placeholder="Вставьте лог терминала (Paste go-libp2p console log line history here)..."
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                className="w-full max-w-md h-24 bg-[#07080D] border border-[#1E212B] rounded p-2 text-[10px] text-[#00FF41] focus:outline-none focus:border-[#00FF41]/40 tracking-tight font-mono resize-none leading-snug placeholder:text-slate-600 mb-3 select-text"
+              />
+              
+              <div className="flex flex-wrap gap-2 justify-center max-w-sm">
+                <button
+                  onClick={handleParseLogs}
+                  disabled={!pasteText.trim()}
+                  className={`py-1 px-3 rounded text-[10px] uppercase cursor-pointer transition-all border font-bold font-mono ${
+                    pasteText.trim()
+                      ? 'bg-[#00FF41]/10 border-[#00FF41]/30 hover:bg-[#00FF41]/25 text-[#00FF41]'
+                      : 'bg-slate-800/30 text-slate-600 border-transparent cursor-not-allowed'
+                  }`}
+                >
+                  Разобрать логи / Parse Logs
+                </button>
+                <button
+                  onClick={handleLoadSample}
+                  className="py-1 px-3 bg-[#F27D26]/10 border border-[#F27D26]/30 hover:bg-[#F27D26]/25 text-[#F27D26] font-bold font-mono rounded text-[10px] uppercase cursor-pointer transition-all"
+                >
+                  Загрузить пример ({node.id === 'node-a' ? 'Windows' : 'Android'})
+                </button>
               </div>
-            ))}
-          </>
+            </div>
+          ) : (
+            <>
+              {node.logs.map((log) => (
+                <div key={log.id} className="flex flex-col font-mono text-xs">
+                  <div className="flex items-start gap-1 w-full flex-wrap whitespace-pre-wrap">
+                    <span className="text-[#4B5563] shrink-0 text-[10px] select-none">{log.timestamp}</span>
+                    <span className={`${getLogColorClass(log.type, log.message)}`}>
+                      {log.message}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </>
+          )
         )}
       </div>
 
