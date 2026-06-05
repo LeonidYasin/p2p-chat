@@ -4,7 +4,7 @@ import { Shield, Radio, Key, Share2, Compass, Cpu, Cable } from 'lucide-react';
 export default function ArchitectureGuide() {
   return (
     <div className="bg-[#12141C] border border-[#1E212B] rounded-lg p-5 text-[#E0E0E0] space-y-6 font-mono">
-      {/* Visual layout intro */}
+      {/* Visual layout intro  */}
       <div className="space-y-1.5 border-b border-[#1E212B] pb-3">
         <h3 className="font-bold text-[#6B7280] text-[10px] tracking-widest uppercase flex items-center gap-2">
           <Share2 className="w-4 h-4 text-[#00FF41]" />

@@ -787,11 +787,8 @@ func setupUDPDiscovery(ctx context.Context, h host.Host, localIP string, listenP
 		Control: func(network, address string, c syscall.RawConn) error {
 			var opErr error
 			err := c.Control(func(fd uintptr) {
-				// Allow multiple sessions to bind to the same port on the same phone
-				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
-				// Enable broadcast capability for UDP sockets
-				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
+				// Set socket options in a cross-platform manner
+				setSocketOptions(fd)
 			})
 			if err != nil {
 				return err
