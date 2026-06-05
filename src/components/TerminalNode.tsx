@@ -99,12 +99,12 @@ Export Date Timestamp  : ${new Date().toISOString()}
 
     const fullDump = headerBanner + '\n' + logLines + '\n\n========================= END OF LOG DUMP =========================';
 
-    const blob = new Blob([fullDump], { type: 'text/markdown;charset=utf-8' });
+    const blob = new Blob([fullDump], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     
     const link = document.createElement('a');
     link.href = url;
-    link.download = `libp2p-${node.nickname.toLowerCase()}-session.log`;
+    link.download = `libp2p-${node.nickname.toLowerCase()}-session.txt`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -147,14 +147,16 @@ Export Date Timestamp  : ${new Date().toISOString()}
           <button
             onClick={handleExportLogs}
             disabled={node.logs.length === 0}
-            title={node.logs.length === 0 ? "Terminal log is empty" : `Export ${node.nickname}'s session logs (.log)`}
-            className={`p-1 rounded cursor-pointer transition-colors border ${
+            title={node.logs.length === 0 ? "Terminal log is empty" : `Download ${node.nickname}'s session logs (.txt)`}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-mono font-bold cursor-pointer transition-all border ${
               node.logs.length === 0
                 ? 'bg-[#1E212B]/20 text-[#6B7280]/50 border-transparent cursor-not-allowed'
                 : 'bg-[#00FF41]/10 text-[#00FF41] hover:bg-[#00FF41]/25 border-[#00FF41]/20 hover:shadow-[0_0_8px_rgba(0,255,65,0.15)]'
             }`}
+            id={`download-logs-btn-${node.id}`}
           >
-            <Download className="w-3.5 h-3.5" />
+            <Download className="w-3 h-3" />
+            <span className="hidden sm:inline">Download Logs</span>
           </button>
           <button
             onClick={() => onTogglePower(node.id)}

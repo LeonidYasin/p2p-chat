@@ -481,6 +481,60 @@ func bootstrapConnectQuiet(ctx context.Context, h host.Host, bootstrapPeers []st
 	}
 }
 
+// Extract own listening IP/port maps to prevent loopback and self-dials
+func getOwnIPsAndPorts(h host.Host) (map[string]bool, map[string]bool) {
+	ips := make(map[string]bool)
+	ports := make(map[string]bool)
+	
+	ips["127.0.0.1"] = true
+	ips["::1"] = true
+	ips["0.0.0.0"] = true
+	
+	for _, maddr := range h.Addrs() {
+		parts := strings.Split(maddr.String(), "/")
+		for i, part := range parts {
+			if part == "ip4" || part == "ip6" {
+				if i+1 < len(parts) {
+					ips[parts[i+1]] = true
+				}
+			}
+			if part == "tcp" || part == "udp" {
+				if i+1 < len(parts) {
+					ports[parts[i+1]] = true
+				}
+			}
+		}
+	}
+	return ips, ports
+}
+
+// Determines if a candidate address matches our own private IP/loopback combined with our active port
+func isSelfAddress(addr multiaddr.Multiaddr, ownIPs map[string]bool, ownPorts map[string]bool) bool {
+	parts := strings.Split(addr.String(), "/")
+	hasOwnIP := false
+	hasOwnPort := false
+	
+	for i, part := range parts {
+		if part == "ip4" || part == "ip6" {
+			if i+1 < len(parts) {
+				ip := parts[i+1]
+				if ownIPs[ip] {
+					hasOwnIP = true
+				}
+			}
+		}
+		if part == "tcp" || part == "udp" {
+			if i+1 < len(parts) {
+				port := parts[i+1]
+				if ownPorts[port] {
+					hasOwnPort = true
+				}
+			}
+		}
+	}
+	return hasOwnIP && hasOwnPort
+}
+
 // Setup local mDNS peer discovery handler
 type discoveryNotifee struct {
 	h host.Host
@@ -511,28 +565,29 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 		rtSize := kademliaDHT.RoutingTable().Size()
 
 		if conns == 0 && rtSize == 0 {
-			fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Peer connections: 0, RT size: 0. Rebootstrapping quietly to rebuild DHT table...\n> ", rendezvous)
+			fmt.Printf("\n[Search: 📡 Waiting] Searching room \"%s\"... Connected to 0 bootstrap nodes.\n", rendezvous)
+			fmt.Printf("   💡 [P2P Help]: Initial internet connection takes 5-15s. Ensure cellular or Wi-Fi internet is active.\n> ")
 			bootstrapConnectQuiet(ctx, h, bootstrapPeers)
 			return
 		}
 
 		if conns > 0 && rtSize == 0 {
-			fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Live network links: %d | RT size: 0. Triggering Kademlia DHT Bootstrap to populate routing table...\n> ", rendezvous, conns)
+			fmt.Printf("\n[Search: 📡 DHT Link Established] Room: \"%s\" | DHT boot connections: %d | RT size: 0. Rebootstrapping table...\n", rendezvous, conns)
+			fmt.Printf("   💡 [P2P Help]: Building routing tables & downloading rendezvous indices takes ~10-25s. Please keep the app open.\n> ")
 			_ = kademliaDHT.Bootstrap(ctx)
+			return
 		}
 
-		fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Live network links: %d | RT size: %d. Actively crawling Kad-DHT indices...\n> ", rendezvous, conns, rtSize)
+		fmt.Printf("\n[Search: 📡 Active DHT Crawl] Room: \"%s\" | DHT routing links: %d | DHT Table Size: %d\n", rendezvous, conns, rtSize)
+		fmt.Printf("   🔍 Scanning Kad-DHT peer index indices for partners... \n> ")
 		peerChan, err := routingDiscovery.FindPeers(ctx, rendezvous)
 		if err != nil {
-			fmt.Printf("\n[Search: ⚠️ Error] Failed to initiate DHT search: %v\n> ", err)
+			fmt.Printf("\n[Search: ⚠️ Error] Failed to crawl DHT indexes: %v\n> ", err)
 			return
 		}
 
 		foundAny := false
-		ownAddrs := make(map[string]bool)
-		for _, addr := range h.Addrs() {
-			ownAddrs[addr.String()] = true
-		}
+		ownIPs, ownPorts := getOwnIPsAndPorts(h)
 
 		for peerInfo := range peerChan {
 			if peerInfo.ID == h.ID() {
@@ -544,36 +599,47 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 				continue
 			}
 
-			// Filter out our own active listening multiaddresses to prevent dialing ourselves
+			// Filter out our own active listening multiaddresses (combining IP & Port) to prevent self-dials
 			var cleanAddrs []multiaddr.Multiaddr
 			for _, addr := range peerInfo.Addrs {
-				if ownAddrs[addr.String()] {
+				if isSelfAddress(addr, ownIPs, ownPorts) {
 					continue
 				}
 				cleanAddrs = append(cleanAddrs, addr)
 			}
 
 			if len(cleanAddrs) == 0 {
-				continue // Skip dialing if the discovered addresses only point to ourselves
+				continue // Skip dialing if discovered IP addresses only loopback/point to ourselves on this active port
 			}
 			peerInfo.Addrs = cleanAddrs
 
 			foundAny = true
-			fmt.Printf("\n[Search: ✨ Discovered] Found candidate peer ID %s in room \"%s\"! Pitching secure link...\n> ", peerInfo.ID.ShortString(), rendezvous)
+			fmt.Printf("\n[Search: ✨ Discovered] Found candidate peer \"%s\" (ID: %s) in room \"%s\"! Attempting to secure link...\n> ", peerInfo.ID.ShortString(), peerInfo.ID.String()[:12]+"...", rendezvous)
 			
 			// Try to connect to peer
 			err := h.Connect(ctx, peerInfo)
 			if err != nil {
-				fmt.Printf("\n[Search: ⚠️ Handshake fail] Link to %s refused/timed out: %v (DCUtR hole punching or Circuit Relay v2 will try again shortly)\n> ", peerInfo.ID.ShortString(), err)
+				// Suppress the extremely long verbose trace trace log and give a highly polished user feedback
+				shortErr := err.Error()
+				if strings.Contains(shortErr, "all dials failed") {
+					shortErr = "Direct connection vectors failed (symmetric NAT or firewalled UDP/TCP traffic)."
+				} else if strings.Contains(shortErr, "connection refused") {
+					shortErr = "Local network port is closed or refused."
+				} else if strings.Contains(shortErr, "context deadline exceeded") {
+					shortErr = "Handshake dial attempt timed out."
+				}
+				
+				fmt.Printf("\n[Search: ⚠️ NAT Obstacle] Peer %s is registered on DHT but dial failed: %s\n", peerInfo.ID.ShortString(), shortErr)
+				fmt.Printf("   💡 [How to fix]: Relay nodes are automatically trying to broker a hole-punch connection (DCUtR) or negotiate a circuit fallback. Keep terminal running!\n> ")
 				continue
 			}
 
-			fmt.Printf("\n[Search: 🎉 CONNECTED] Fully connected to peer %s! Upgrading libp2p stream...\n> ", peerInfo.ID.ShortString())
+			fmt.Printf("\n[Search: 🎉 CONNECTED] Fully connected and shook hands with peer %s! Upgrading communication pipe...\n> ", peerInfo.ID.ShortString())
 			openChatStream(ctx, h, peerInfo.ID, nickname)
 		}
 
 		if !foundAny {
-			fmt.Printf("\n[Search: 📡 Querying DHT] Done. 0 other peers currently online in room \"%s\". (Check if separate devices are spelling room identically)\n> ", rendezvous)
+			fmt.Printf("\n[Search: 📡 Crawl Done] 0 other peers found in room \"%s\" on this scan. (Keep app open, searching repeats every 15s. Check that room names match exactly!)\n> ", rendezvous)
 		}
 	}
 
