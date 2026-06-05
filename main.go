@@ -104,11 +104,12 @@ func main() {
 			if peer.ID == h.ID() {
 				return // Skip ourself
 			}
-			fmt.Printf("[mDNS] Discovered local peer %s, attempting connection...\n", peer.ID.ShortString())
+			fmt.Printf("\n[mDNS: ✨ Peer Discovered] Local network peer found: %s\n", peer.ID.ShortString())
+			fmt.Printf("   [mDNS: 🔗 Dialing] Attempting local connection to %v...\n> ", peer.Addrs)
 			if err := h.Connect(ctx, peer); err != nil {
-				// Failed to connect, but that is fine in dynamic local nets
+				fmt.Printf("[mDNS: ⚠️ Dial Failed] Could not establish connection to local peer %s: %v\n> ", peer.ID.ShortString(), err)
 			} else {
-				fmt.Printf("[mDNS] Connected to local peer %s!\n", peer.ID.ShortString())
+				fmt.Printf("[mDNS: 🎉 CONNECTED] Handshake success with local peer %s!\n> ", peer.ID.ShortString())
 				openChatStream(ctx, h, peer.ID, config.Nickname)
 			}
 		})
@@ -549,6 +550,8 @@ func setupMDNS(h host.Host, serviceTag string, callback func(peer.AddrInfo)) {
 	s := mdns.NewMdnsService(h, serviceTag, &discoveryNotifee{h: h, c: callback})
 	if err := s.Start(); err != nil {
 		fmt.Println("[*] Standard mDNS local discovery is unsupported in this environment due to OS netlink restrictions. Custom UDP Broadcast Discovery is active to handle auto connections instead.")
+	} else {
+		fmt.Println("[*] Standard mDNS local discovery started successfully! Listening for local Multicast packets.")
 	}
 }
 
@@ -622,7 +625,8 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 			peerInfo.Addrs = cleanAddrs
 
 			foundAny = true
-			fmt.Printf("\n[Поиск: ✨ Пир обнаружен / Search: ✨ Peer Discovered] Ник/ID: \"%s\" (ID: %s) в комнате \"%s\"!\n", peerInfo.ID.ShortString(), peerInfo.ID.String()[:12]+"...", rendezvous)
+			fmt.Printf("\n[Поиск: ✨ Пир обнаружен / Search: ✨ Peer Discovered] ID: %s в комнате \"%s\"!\n", peerInfo.ID.ShortString(), rendezvous)
+			fmt.Printf("   📱 [Адреса пира / Peer Addresses]: %v\n", peerInfo.Addrs)
 			fmt.Printf("   🔗 [1/2] Начинаем установку защищенного соединения (Noise / Handshake)... / Starting handshake...\n> ")
 			
 			// Try to connect to peer
@@ -630,20 +634,20 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 			if err != nil {
 				shortErr := err.Error()
 				if strings.Contains(shortErr, "all dials failed") {
-					shortErr = "Препятствие NAT: Все попытки прямого подключения заблокированы роутером или оператором связи."
+					shortErr = "Препятствие NAT: Все попытки прямого подключения заблокированы роутером, брандмауэром или оператором связи."
 				} else if strings.Contains(shortErr, "connection refused") {
 					shortErr = "Порт удаленной машины закрыт или отклонил входящее соединение."
 				} else if strings.Contains(shortErr, "context deadline exceeded") {
 					shortErr = "Таймаут ожидания рукопожатия (Handshake Dial Timeout)."
 				}
 				
-				fmt.Printf("\n[Search: ⚠️ NAT Obstacle] Узел %s зарегистрирован в DHT, но прямое подключение отклонено: %s\n", peerInfo.ID.ShortString(), shortErr)
+				fmt.Printf("\n[Search: ⚠️ NAT Obstacle / Dial Fail] Узел %s зарегистрирован в DHT, но прямое подключение завершилось ошибкой:\n", peerInfo.ID.ShortString())
+				fmt.Printf("   ❌ [Ошибка / Short Reason]: %s\n", shortErr)
+				fmt.Printf("   🔍 [Полная ошибка / Raw Trace]: %v\n", err)
 				fmt.Printf("   💡 [Почему это происходит? / NAT Explanation]:\n")
-				fmt.Printf("      - На WINDOWS: Wi-Fi роутеры чаще всего Full Cone / Restricted NAT (порты легко пробиваются).\n")
-				fmt.Printf("      - На ANDROID (Termux): Мобильный интернет (4G/5G) использует жесткий CGNAT (Carrier-Grade NAT) оператора.\n")
-				fmt.Printf("      - Напрямую такие устройства соединиться не могут. Сеть libp2p сейчас автоматически пытается пробить NAT\n")
-				fmt.Printf("        с помощью протокола Hole Punching (DCUtR) или перенаправляет трафик через публичные реле-ноды (Relay v2).\n")
-				fmt.Printf("      💡 ПОЖАЛУЙСТА, НЕ ЗАКРЫВАЙТЕ приложение! Процесс децентрализованного пробития NAT и ретрансляции идет непрерывно.\n> ")
+				fmt.Printf("      - На WINDOWS: Брандмауэр Windows (Windows Defender Firewall) может блокировать входящие порты. Проверьте запуск от имени Администратора.\n")
+				fmt.Printf("      - На ANDROID (Termux): Мобильный интернет (4G/5G/LTE) использует CGNAT. Убедитесь, что оба устройства находятся в одной локальной сети Wi-Fi или используйте релей-ноду.\n")
+				fmt.Printf("      - Также проверьте, что на обоих сторонах запущен одинаковый номер комнаты Rendezvous.\n> ")
 				continue
 			}
 
@@ -672,11 +676,13 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 
 // Open an outgoing chat stream context to a specific peer
 func openChatStream(ctx context.Context, h host.Host, peerID peer.ID, nickname string) {
-	// Avoid creating multiple streams if already connected and communicating
+	fmt.Printf("[Stream: 📡 Opening] Requesting chat payload channel to target ID: %s...\n> ", peerID.ShortString())
 	s, err := h.NewStream(ctx, peerID, chatProtocol)
 	if err != nil {
+		fmt.Printf("[Stream: ⚠️ Error] Failed to open outgoing chat channel: %v\n> ", err)
 		return
 	}
+	fmt.Printf("[Stream: 🟢 Connected] Secure multiplexed chat channel opened with peer %s!\n> ", peerID.ShortString())
 	// Handshake or write initial info
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 	go writeStreamLoop(rw, nickname)
@@ -685,7 +691,7 @@ func openChatStream(ctx context.Context, h host.Host, peerID peer.ID, nickname s
 
 // Read message strings from an incoming stream network endpoint
 func handleIncomingStream(s network.Stream, nickname string) {
-	fmt.Printf("\n[Stream] Incoming connection opened from peer: %s\n", s.Conn().RemotePeer().ShortString())
+	fmt.Printf("\n[Stream: 🟢 Incoming Connected] Multiplexed chat channel requested by peer: %s\n> ", s.Conn().RemotePeer().ShortString())
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 	
 	// Create reading thread
@@ -931,6 +937,8 @@ func setupUDPDiscovery(ctx context.Context, h host.Host, localIP string, listenP
 	}
 	defer conn.Close()
 
+	fmt.Printf("[UDP Discovery: 📡 Active] Listener successfully bound on local UDP port %d!\n> ", udpPort)
+
 	udpConn, ok := conn.(*net.UDPConn)
 	if !ok {
 		return
@@ -987,10 +995,13 @@ func setupUDPDiscovery(ctx context.Context, h host.Host, localIP string, listenP
 					Addrs: maddrs,
 				}
 
-				fmt.Printf("\n[UDP Discovery] Automatically discovered peer: %s (%s)\n> ", payload.Nick, peerID.ShortString())
+				fmt.Printf("\n[UDP Discovery: 📨 Packet Received] Found network beacon from user: \"%s\" (ID: %s)\n", payload.Nick, peerID.ShortString())
+				fmt.Printf("   📌 [UDP Discovery: 🔗 Dialing] Attempting handshakes with addresses: %v\n> ", maddrs)
 				if connectErr := h.Connect(ctx, peerInfo); connectErr == nil {
-					fmt.Printf("[UDP Discovery] Connected to %s!\n> ", payload.Nick)
+					fmt.Printf("[UDP Discovery: 🎉 CONNECTED] Connected to local user \"%s\" (%s)!\n> ", payload.Nick, peerID.ShortString())
 					openChatStream(ctx, h, peerID, nickname)
+				} else {
+					fmt.Printf("[UDP Discovery: ⚠️ Dial Failed] Could not establish link to \"%s\": %v\n> ", payload.Nick, connectErr)
 				}
 			}
 		}
