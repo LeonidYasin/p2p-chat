@@ -113,10 +113,11 @@ export default function App() {
                 { id: `sys-2-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Created libp2p Host successfully on port ${n.port}.` },
                 { id: `sys-3-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Peer ID: ${n.peerId}` },
                 { id: `sys-4-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Multiaddress: /ip4/127.0.0.1/tcp/${n.port}/p2p/${n.peerId.slice(0, 10)}...` },
-                { id: `sys-b1-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[*] Connecting to 1 DHT bootstrap node(s)...` },
-                { id: `sys-b2-${Date.now()}`, timestamp: getTimestamp(), type: 'discovery', message: `[+] Established connection to DHT bootstrap: QmBootstrap!` },
-                { id: `sys-b3-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `[+] Successfully attached to the global P2P Kad-DHT routing table (Connected to 1 boots)!` },
-                { id: `sys-5-${Date.now()}`, timestamp: getTimestamp(), type: 'discovery', message: `[Search: 📡 Querying DHT] Room: "${rendezvousRoom}" | Live network links: 1. Actively crawling Kad-DHT indices...` }
+                { id: `sys-5-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `\n[Поиск: 📡 Ожидание / Search: 📡 Waiting] Комната / Room: "${rendezvousRoom}"` },
+                { id: `sys-6-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `   📶 Подключение к DHT бутстрап-серверам: 0 🔴` },
+                { id: `sys-7-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `   💡 [P2P Справка]: Первичное подключение к DHT-сети обычно занимает от 5 до 15 секунд.` },
+                { id: `sys-8-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `      Убедитесь, что интернет активен (Wi-Fi или сотовая связь).` },
+                { id: `sys-9-${Date.now()}`, timestamp: getTimestamp(), type: 'system', message: `   💡 [P2P Info]: Initial DHT boot strap takes 5-15s. Checking internet...\n` }
               ]
             };
           } else {
@@ -134,7 +135,7 @@ export default function App() {
       })
     );
 
-    // If turned online, queue dynamic step transitions
+    // If turned online, queue dynamic step transitions representing real-world timing
     const sourceNode = nodes.find((n) => n.id === nodeId);
     if (sourceNode && !sourceNode.isOnline) {
       setTimeout(() => {
@@ -145,7 +146,13 @@ export default function App() {
               : cn
           )
         );
-      }, 1000);
+        appendNodeLog(nodeId, 'system', `[Поиск: 📡 Сеть активна / Search: 📡 DHT Connected] Комната / Room: "${rendezvousRoom}"`);
+        appendNodeLog(nodeId, 'system', `   📶 Соединение с DHT: Установлено (1 бутстрапов) 🟢`);
+        appendNodeLog(nodeId, 'system', `   📊 Сборка таблицы маршрутизации Kademlia (Размер RT: 0) 🔄`);
+        appendNodeLog(nodeId, 'system', `   💡 [P2P Справка]: Строим таблицы маршрутизации и скачиваем индексы комнаты. Это занимает ~10-25 секунд.`);
+        appendNodeLog(nodeId, 'system', `      На Android / Termux это может идти чуть дольше из-за ограничений ОС.`);
+        appendNodeLog(nodeId, 'system', `   💡 [P2P Info]: Building Kademlia routing tables. Downloading indexes (10-25s)...\n`);
+      }, 1500);
 
       setTimeout(() => {
         setNodes((curr) =>
@@ -155,13 +162,56 @@ export default function App() {
               : cn
           )
         );
-      }, 2500);
-    }
+        appendNodeLog(nodeId, 'system', `[Поиск: 📡 Активный сканирование / Search: 📡 Crawling DHT] Комната / Room: "${rendezvousRoom}"`);
+        appendNodeLog(nodeId, 'system', `   📶 Активные узлы DHT / Routing links: 2 | Размер таблицы / RT Size: 3 🟢`);
+        appendNodeLog(nodeId, 'system', `   🔍 Сканируем глобальный DHT-индекс на наличие собеседников... / Looking for active candidates...\n`);
+      }, 3500);
 
-    // Trigger quick dynamic mDNS/DHT discovery matching shortly after booting
-    setTimeout(() => {
-      triggerPeerDiscovery();
-    }, 1500);
+      // Simulate a realistic Peer Discovered + NAT CGNAT warning + eventual Relay Hole punch fallback
+      setTimeout(() => {
+        setNodes((curr) => {
+          const onlinePeers = curr.filter((oth) => oth.id !== nodeId && oth.isOnline);
+          if (onlinePeers.length === 0) {
+            appendNodeLog(nodeId, 'system', `[Поиск: 📡 Поиск завершен / Search: 📡 Crawl Done] 0 других собеседников найдено на текущем цикле в комнате "${rendezvousRoom}".`);
+            appendNodeLog(nodeId, 'system', `   💡 (Поиск повторяется каждые 15 сек. Держите приложение запущенным. Проверьте правильность названия комнаты у обоих пиров!)\n`);
+            return curr;
+          }
+
+          const targetPeer = onlinePeers[0];
+          appendNodeLog(nodeId, 'discovery', `[Поиск: ✨ Пир обнаружен / Search: ✨ Peer Discovered] Ник/ID: "${targetPeer.nickname}" (ID: Qm${targetPeer.peerId.slice(0, 8)}...) в комнате "${rendezvousRoom}"!`);
+          appendNodeLog(nodeId, 'system', `   🔗 [1/2] Начинаем установку защищенного соединения (Noise / Handshake)... / Starting handshake...`);
+
+          setTimeout(() => {
+            appendNodeLog(nodeId, 'error', `[Search: ⚠️ NAT Obstacle] Узел ${targetPeer.nickname} зарегистрирован в DHT, но прямое подключение отклонено: Препятствие NAT`);
+            appendNodeLog(nodeId, 'system', `   💡 [Почему это происходит? / NAT Explanation]:`);
+            appendNodeLog(nodeId, 'system', `      - На WINDOWS: Wi-Fi роутеры чаще всего Full Cone / Restricted NAT (порты легко пробиваются).`);
+            appendNodeLog(nodeId, 'system', `      - На ANDROID (Termux): Мобильный интернет (4G/5G) использует жесткий CGNAT (Carrier-Grade NAT) оператора.`);
+            appendNodeLog(nodeId, 'system', `      - Напрямую такие устройства соединиться не могут. Сеть libp2p сейчас автоматически пытается пробить NAT`);
+            appendNodeLog(nodeId, 'system', `        с помощью протокола Hole Punching (DCUtR) или перенаправляет трафик через публичные реле-ноды (Relay v2).`);
+            appendNodeLog(nodeId, 'system', `      💡 ПОЖАЛУЙСТА, НЕ ЗАКРЫВАЙТЕ приложение! Процесс децентрализованного пробития NAT и ретрансляции идет непрерывно.\n`);
+
+            setTimeout(() => {
+              appendNodeLog(nodeId, 'stream', `[Search: 🎉 CONNECTED] Успешное соединение! Полный рукопожатие завершено с пиром ${targetPeer.nickname}! Прямой чат-канал настроен.\n`);
+              
+              // Transition both into connected status
+              setNodes((nowNodes) =>
+                nowNodes.map((nowN) => {
+                  if (nowN.id === nodeId && !nowN.peers.includes(targetPeer.id)) {
+                    return { ...nowN, peers: [...nowN.peers, targetPeer.id], discoveryState: 'connected' };
+                  }
+                  if (nowN.id === targetPeer.id && !nowN.peers.includes(nodeId)) {
+                    return { ...nowN, peers: [...nowN.peers, nodeId], discoveryState: 'connected' };
+                  }
+                  return nowN;
+                })
+              );
+            }, 3000);
+          }, 1500);
+
+          return curr;
+        });
+      }, 5000);
+    }
   };
 
   // Discovery engine: checks who is online and coordinates links based on Room value
