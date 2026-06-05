@@ -208,8 +208,21 @@ export default function App() {
     );
   };
 
-  // Toggle node power physically
+  // Toggle node power physically (or boot real container Go-libp2p daemon for node-c)
   const handleTogglePower = (nodeId: string) => {
+    if (nodeId === 'node-c') {
+      const nodeC = nodes.find(n => n.id === 'node-c');
+      if (nodeC) {
+        const targetAction = nodeC.isOnline ? 'stop' : 'start';
+        fetch('/api/relay/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: targetAction, room: rendezvousRoom })
+        }).catch(err => console.error("Relay toggle error:", err));
+      }
+      return;
+    }
+
     setNodes((prev) =>
       prev.map((n) => {
         if (n.id === nodeId) {
@@ -226,6 +239,51 @@ export default function App() {
       })
     );
   };
+
+  // Poll the backend Go P2P Relay node state periodically to keep Device #3's logs and power states real synced
+  useEffect(() => {
+    const pollInterval = setInterval(() => {
+      fetch("/api/relay/state")
+        .then((res) => {
+          if (!res.ok) throw new Error("HTTP error");
+          return res.json();
+        })
+        .then((data: { running: boolean; logs: string }) => {
+          setNodes((prev) =>
+            prev.map((n) => {
+              if (n.id === "node-c") {
+                if (data.running) {
+                  const parsed = parseGoLogs(data.logs, "node-c", "Device #3 (Bootstrap Relay)", 4001);
+                  return {
+                    ...n,
+                    isOnline: true,
+                    nickname: parsed.nickname,
+                    peerId: parsed.peerId,
+                    port: parsed.port,
+                    rendezvous: parsed.rendezvous,
+                    logs: parsed.logs,
+                    discoveryState: parsed.discoveryState,
+                  };
+                } else {
+                  return {
+                    ...n,
+                    isOnline: false,
+                    discoveryState: "offline",
+                    logs: data.logs ? parseGoLogs(data.logs, "node-c", "Device #3 (Bootstrap Relay)", 4001).logs : []
+                  };
+                }
+              }
+              return n;
+            })
+          );
+        })
+        .catch((err) => {
+          // Ignore API/server loading errors
+        });
+    }, 1500);
+
+    return () => clearInterval(pollInterval);
+  }, [rendezvousRoom]);
 
   // Dynamically resolve links and connections between nodes by scanning parsed log texts
   useEffect(() => {
@@ -319,6 +377,16 @@ export default function App() {
 
     // Append standard prompt echo
     appendNodeLog(nodeId, 'system', `> ${input}`);
+
+    if (nodeId === 'node-c') {
+      // Forward directly to the real Go-libp2p node running on the container backend
+      fetch('/api/relay/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: input })
+      }).catch(err => console.error("Failed to route command to Go process stdin:", err));
+      return;
+    }
 
     // Command Parser
     if (input.startsWith('/')) {
