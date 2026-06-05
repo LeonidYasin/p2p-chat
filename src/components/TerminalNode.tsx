@@ -1,6 +1,6 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { P2PNode } from '../types';
-import { Terminal, Shield, Power, Wifi, HelpCircle, Download } from 'lucide-react';
+import { Terminal, Shield, Power, Wifi, HelpCircle, Download, Clock } from 'lucide-react';
 
 interface TerminalNodeProps {
   node: P2PNode;
@@ -18,6 +18,29 @@ export default function TerminalNode({
   peerCount,
 }: TerminalNodeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [activeSeconds, setActiveSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!node.isOnline) {
+      setActiveSeconds(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setActiveSeconds(prev => prev + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [node.isOnline]);
+
+  const formatDuration = (totalSeconds: number) => {
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    if (mins > 0) {
+      return `${mins}m ${secs.toString().padStart(2, '0')}s`;
+    }
+    return `${secs}s`;
+  };
 
   // Auto-scroll the terminal inner console when logs grow
   useEffect(() => {
@@ -125,10 +148,24 @@ Export Date Timestamp  : ${new Date().toISOString()}
             {node.nickname} <span className="text-[#6B7280] font-normal">(:{node.port})</span>
           </span>
           {node.isOnline ? (
-            <span className="flex items-center gap-1 text-[9px] bg-[#00FF41]/10 text-[#00FF41] font-mono px-1.5 py-0.5 rounded border border-[#00FF41]/30">
-              <span className="w-1 h-1 rounded-full bg-[#00FF41] animate-pulse" />
-              ONLINE
-            </span>
+            <>
+              <span className="flex items-center gap-1 text-[9px] bg-[#00FF41]/10 text-[#00FF41] font-mono px-1.5 py-0.5 rounded border border-[#00FF41]/30">
+                <span className="w-1 h-1 rounded-full bg-[#00FF41] animate-pulse" />
+                ONLINE
+              </span>
+              <span 
+                className={`flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded border select-none transition-all duration-300 ${
+                  peerCount > 0
+                    ? 'bg-[#00FF41]/5 text-[#00FF41]/80 border-[#00FF41]/15'
+                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                }`}
+                title={peerCount > 0 ? "Yamux stream active session duration" : "Time spent searching routing table and peers"}
+                id={`node-timer-${node.id}`}
+              >
+                <Clock className={`w-2.5 h-2.5 ${peerCount === 0 ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
+                <span>{peerCount > 0 ? 'ACTIVE' : 'SEARCHING'}: {formatDuration(activeSeconds)}</span>
+              </span>
+            </>
           ) : (
             <span className="text-[9px] bg-[#1E212B] text-[#6B7280] font-mono px-1.5 py-0.5 rounded border border-transparent">
               SUSPENDED

@@ -565,21 +565,29 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 		rtSize := kademliaDHT.RoutingTable().Size()
 
 		if conns == 0 && rtSize == 0 {
-			fmt.Printf("\n[Search: 📡 Waiting] Searching room \"%s\"... Connected to 0 bootstrap nodes.\n", rendezvous)
-			fmt.Printf("   💡 [P2P Help]: Initial internet connection takes 5-15s. Ensure cellular or Wi-Fi internet is active.\n> ")
+			fmt.Printf("\n[Поиск: 📡 Ожидание / Search: 📡 Waiting] Комната / Room: \"%s\"\n", rendezvous)
+			fmt.Printf("   📶 Подключение к DHT бутстрап-серверам: 0 %s\n", "🔴")
+			fmt.Printf("   💡 [P2P Справка]: Первичное подключение к DHT-сети обычно занимает от 5 до 15 секунд.\n")
+			fmt.Printf("      Убедитесь, что интернет активен (Wi-Fi или сотовая связь).\n")
+			fmt.Printf("   💡 [P2P Info]: Initial DHT boot strap takes 5-15s. Checking internet...\n> ")
 			bootstrapConnectQuiet(ctx, h, bootstrapPeers)
 			return
 		}
 
 		if conns > 0 && rtSize == 0 {
-			fmt.Printf("\n[Search: 📡 DHT Link Established] Room: \"%s\" | DHT boot connections: %d | RT size: 0. Rebootstrapping table...\n", rendezvous, conns)
-			fmt.Printf("   💡 [P2P Help]: Building routing tables & downloading rendezvous indices takes ~10-25s. Please keep the app open.\n> ")
+			fmt.Printf("\n[Поиск: 📡 Сеть активна / Search: 📡 DHT Connected] Комната / Room: \"%s\"\n", rendezvous)
+			fmt.Printf("   📶 Соединение с DHT: Установлено (%d бутстрапов) %s\n", conns, "🟢")
+			fmt.Printf("   📊 Сборка таблицы маршрутизации Kademlia (Размер RT: 0) %s\n", "🔄")
+			fmt.Printf("   💡 [P2P Справка]: Строим таблицы маршрутизации и скачиваем индексы комнаты. Это занимает ~10-25 секунд.\n")
+			fmt.Printf("      На Android / Termux это может идти чуть дольше из-за ограничений ОС.\n")
+			fmt.Printf("   💡 [P2P Info]: Building Kademlia routing tables. Downloading indexes (10-25s)...\n> ")
 			_ = kademliaDHT.Bootstrap(ctx)
 			return
 		}
 
-		fmt.Printf("\n[Search: 📡 Active DHT Crawl] Room: \"%s\" | DHT routing links: %d | DHT Table Size: %d\n", rendezvous, conns, rtSize)
-		fmt.Printf("   🔍 Scanning Kad-DHT peer index indices for partners... \n> ")
+		fmt.Printf("\n[Поиск: 📡 Активный сканирование / Search: 📡 Crawling DHT] Комната / Room: \"%s\"\n", rendezvous)
+		fmt.Printf("   📶 Активные узлы DHT / Routing links: %d | Размер таблицы / RT Size: %d %s\n", conns, rtSize, "🟢")
+		fmt.Printf("   🔍 Сканируем глобальный DHT-индекс на наличие собеседников... / Looking for active candidates...\n> ")
 		peerChan, err := routingDiscovery.FindPeers(ctx, rendezvous)
 		if err != nil {
 			fmt.Printf("\n[Search: ⚠️ Error] Failed to crawl DHT indexes: %v\n> ", err)
@@ -614,32 +622,38 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 			peerInfo.Addrs = cleanAddrs
 
 			foundAny = true
-			fmt.Printf("\n[Search: ✨ Discovered] Found candidate peer \"%s\" (ID: %s) in room \"%s\"! Attempting to secure link...\n> ", peerInfo.ID.ShortString(), peerInfo.ID.String()[:12]+"...", rendezvous)
+			fmt.Printf("\n[Поиск: ✨ Пир обнаружен / Search: ✨ Peer Discovered] Ник/ID: \"%s\" (ID: %s) в комнате \"%s\"!\n", peerInfo.ID.ShortString(), peerInfo.ID.String()[:12]+"...", rendezvous)
+			fmt.Printf("   🔗 [1/2] Начинаем установку защищенного соединения (Noise / Handshake)... / Starting handshake...\n> ")
 			
 			// Try to connect to peer
 			err := h.Connect(ctx, peerInfo)
 			if err != nil {
-				// Suppress the extremely long verbose trace trace log and give a highly polished user feedback
 				shortErr := err.Error()
 				if strings.Contains(shortErr, "all dials failed") {
-					shortErr = "Direct connection vectors failed (symmetric NAT or firewalled UDP/TCP traffic)."
+					shortErr = "Препятствие NAT: Все попытки прямого подключения заблокированы роутером или оператором связи."
 				} else if strings.Contains(shortErr, "connection refused") {
-					shortErr = "Local network port is closed or refused."
+					shortErr = "Порт удаленной машины закрыт или отклонил входящее соединение."
 				} else if strings.Contains(shortErr, "context deadline exceeded") {
-					shortErr = "Handshake dial attempt timed out."
+					shortErr = "Таймаут ожидания рукопожатия (Handshake Dial Timeout)."
 				}
 				
-				fmt.Printf("\n[Search: ⚠️ NAT Obstacle] Peer %s is registered on DHT but dial failed: %s\n", peerInfo.ID.ShortString(), shortErr)
-				fmt.Printf("   💡 [How to fix]: Relay nodes are automatically trying to broker a hole-punch connection (DCUtR) or negotiate a circuit fallback. Keep terminal running!\n> ")
+				fmt.Printf("\n[Search: ⚠️ NAT Obstacle] Узел %s зарегистрирован в DHT, но прямое подключение отклонено: %s\n", peerInfo.ID.ShortString(), shortErr)
+				fmt.Printf("   💡 [Почему это происходит? / NAT Explanation]:\n")
+				fmt.Printf("      - На WINDOWS: Wi-Fi роутеры чаще всего Full Cone / Restricted NAT (порты легко пробиваются).\n")
+				fmt.Printf("      - На ANDROID (Termux): Мобильный интернет (4G/5G) использует жесткий CGNAT (Carrier-Grade NAT) оператора.\n")
+				fmt.Printf("      - Напрямую такие устройства соединиться не могут. Сеть libp2p сейчас автоматически пытается пробить NAT\n")
+				fmt.Printf("        с помощью протокола Hole Punching (DCUtR) или перенаправляет трафик через публичные реле-ноды (Relay v2).\n")
+				fmt.Printf("      💡 ПОЖАЛУЙСТА, НЕ ЗАКРЫВАЙТЕ приложение! Процесс децентрализованного пробития NAT и ретрансляции идет непрерывно.\n> ")
 				continue
 			}
 
-			fmt.Printf("\n[Search: 🎉 CONNECTED] Fully connected and shook hands with peer %s! Upgrading communication pipe...\n> ", peerInfo.ID.ShortString())
+			fmt.Printf("\n[Search: 🎉 CONNECTED] Успешное соединение! Полный рукопожатие завершено с пиром %s! Настройка чат-канала...\n> ", peerInfo.ID.ShortString())
 			openChatStream(ctx, h, peerInfo.ID, nickname)
 		}
 
 		if !foundAny {
-			fmt.Printf("\n[Search: 📡 Crawl Done] 0 other peers found in room \"%s\" on this scan. (Keep app open, searching repeats every 15s. Check that room names match exactly!)\n> ", rendezvous)
+			fmt.Printf("\n[Поиск: 📡 Поиск завершен / Search: 📡 Crawl Done] 0 других собеседников найдено на текущем цикле в комнате \"%s\".\n", rendezvous)
+			fmt.Printf("   💡 (Поиск повторяется каждые 15 сек. Держите приложение запущенным. Проверьте правильность названия комнаты у обоих пиров!)\n> ")
 		}
 	}
 

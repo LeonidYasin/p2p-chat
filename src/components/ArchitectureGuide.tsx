@@ -77,6 +77,51 @@ export default function ArchitectureGuide() {
           </p>
         </div>
       </div>
+
+      {/* NEW: FAQ & Troubleshooter for Android vs Windows */}
+      <div className="border-t border-[#1E212B] pt-5 space-y-4">
+        <h4 className="font-bold text-white text-xs uppercase tracking-wider flex items-center gap-2">
+          <span className="w-1.5 h-1.5 bg-[#F27D26] rounded-full animate-ping" />
+          <span>Справка по подключению: Android (Termux) vs Windows</span>
+        </h4>
+
+        <div className="space-y-3 font-mono text-[11px] text-[#9CA3AF] leading-relaxed">
+          <div className="bg-[#07080D] p-3.5 rounded border border-[#1E212B] space-y-1.5">
+            <span className="text-[#00FF41] font-bold">Q: Почему на Android соединение не устанавливается сразу, в отличие от локальной симуляции?</span>
+            <p>
+              <strong>A:</strong> На Windows в домашних/офисных сетях Wi-Fi роутеры разрешают свободные входящие TCP/UDP-пакеты и поддерживают автоматический проброс портов (UPnP/NAT-PMP). 
+              <br />
+              В отличие от этого, мобильные сети на смартфонах (4G LTE/5G) работают за жестким <strong>CGNAT (Carrier-Grade NAT)</strong> оператора связи. Ваше устройство не имеет публичного IP, а все входящие порты закрыты. Прямое соединение двух мобильных телефонов невозможно без сложного обхода.
+            </p>
+          </div>
+
+          <div className="bg-[#07080D] p-3.5 rounded border border-[#1E212B] space-y-1.5">
+            <span className="text-[#00FF41] font-bold">Q: Сколько времени нужно ждать для успешного пиринга?</span>
+            <p>
+              <strong>A:</strong> Подключение и децентрализованный поиск разделяются на следующие этапы:
+              <br />
+              1. <strong>Подключение к DHT (5–15 сек)</strong>: Узел ищет и подключается к глобальным серверам-ориентирам (Bootstraps).
+              <br />
+              2. <strong>Поиск участников (10–25 сек)</strong>: Скачиваются списки адресов (индексы) для выбранного имени комнаты.
+              <br />
+              3. <strong>Пробитие NAT (до 45 сек)</strong>: Если оба устройства за NAT, протокол <strong>DCUtR (Hole Punching)</strong> пытается согласованно "пробить" роутеры, либо перенаправляет трафик через бесплатные публичные прокси (Circuit Relay v2).
+              <br />
+              <span className="text-[#F27D26] font-bold">Резюме: Оставьте терминал запущенным на 1–2 минуты. Соединение установится автоматически!</span>
+            </p>
+          </div>
+
+          <div className="bg-[#07080D] p-3.5 rounded border border-[#1E212B] space-y-1.5">
+            <span className="text-[#00FF41] font-bold">Q: Как гарантировать мгновенное соединение?</span>
+            <p>
+              <strong>A:</strong> Если устройства находятся в одной локальной Wi-Fi сети (или раздаче точки доступа):
+              <br />
+              • Убедитесь, что в терминале включен Custom UDP Broadcast Discovery. Он свяжет узлы в обход роутера за 1-3 секунды.
+              <br />
+              • Для интернета: используйте полностью идентичные имена комнат (например, <code>secret-room-123</code>). Не используйте слишком простые имена, чтобы не ловить чужие отключенные пиры общего пула.
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
