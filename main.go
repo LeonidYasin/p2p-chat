@@ -95,7 +95,7 @@ func main() {
 	}
 
 	// Connect to bootstrap peers
-	bootstrapConnect(ctx, h, config.BootstrapPeers)
+	bootstrapConnect(ctx, h, kademliaDHT, config.BootstrapPeers)
 
 	// 4. Start mDNS local network discovery if enabled
 	if config.EnableMDNS {
@@ -400,16 +400,11 @@ func setupDHT(ctx context.Context, h host.Host, bootstrapPeers []string) (*dht.I
 		return nil, err
 	}
 
-	// Bootstrap DHT routing table
-	if err = kademliaDHT.Bootstrap(ctx); err != nil {
-		return nil, err
-	}
-
 	return kademliaDHT, nil
 }
 
 // Connect to bootstrap peers
-func bootstrapConnect(ctx context.Context, h host.Host, bootstrapPeers []string) {
+func bootstrapConnect(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, bootstrapPeers []string) {
 	if len(bootstrapPeers) == 0 {
 		fmt.Println("[!] No bootstrap peers specified. Running in isolated mode.")
 		return
@@ -445,7 +440,7 @@ func bootstrapConnect(ctx context.Context, h host.Host, bootstrapPeers []string)
 		}(peerinfo)
 	}
 
-	// Print feedback
+	// Print feedback and trigger DHT bootstrap routing table refresh
 	go func() {
 		wg.Wait()
 		s := atomic.LoadInt32(&successCount)
@@ -457,6 +452,13 @@ func bootstrapConnect(ctx context.Context, h host.Host, bootstrapPeers []string)
 			fmt.Println("    Ensure you have an active internet connection and UDP/TCP ports allow outbound traffic.")
 		} else {
 			fmt.Printf("[+] Successfully attached to the global P2P Kad-DHT routing table (Connected to %d boots)!\n", s)
+			
+			// Refresh & populate routing table now that we have alive connections
+			if err := kademliaDHT.Bootstrap(ctx); err != nil {
+				fmt.Printf("[!] Warning: Failed to bootstrap Kademlia DHT routing table: %v\n", err)
+			} else {
+				fmt.Println("[*] Kademlia DHT routing table bootstrap query initiated successfully.")
+			}
 		}
 		fmt.Print("> ")
 	}()
@@ -514,6 +516,11 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 			return
 		}
 
+		if conns > 0 && rtSize == 0 {
+			fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Live network links: %d | RT size: 0. Triggering Kademlia DHT Bootstrap to populate routing table...\n> ", rendezvous, conns)
+			_ = kademliaDHT.Bootstrap(ctx)
+		}
+
 		fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Live network links: %d | RT size: %d. Actively crawling Kad-DHT indices...\n> ", rendezvous, conns, rtSize)
 		peerChan, err := routingDiscovery.FindPeers(ctx, rendezvous)
 		if err != nil {
@@ -522,6 +529,11 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 		}
 
 		foundAny := false
+		ownAddrs := make(map[string]bool)
+		for _, addr := range h.Addrs() {
+			ownAddrs[addr.String()] = true
+		}
+
 		for peerInfo := range peerChan {
 			if peerInfo.ID == h.ID() {
 				continue
@@ -531,6 +543,20 @@ func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, r
 			if h.Network().Connectedness(peerInfo.ID) == network.Connected {
 				continue
 			}
+
+			// Filter out our own active listening multiaddresses to prevent dialing ourselves
+			var cleanAddrs []multiaddr.Multiaddr
+			for _, addr := range peerInfo.Addrs {
+				if ownAddrs[addr.String()] {
+					continue
+				}
+				cleanAddrs = append(cleanAddrs, addr)
+			}
+
+			if len(cleanAddrs) == 0 {
+				continue // Skip dialing if the discovered addresses only point to ourselves
+			}
+			peerInfo.Addrs = cleanAddrs
 
 			foundAny = true
 			fmt.Printf("\n[Search: ✨ Discovered] Found candidate peer ID %s in room \"%s\"! Pitching secure link...\n> ", peerInfo.ID.ShortString(), rendezvous)
