@@ -41,25 +41,23 @@ try {
   logNode("Go-Env", "INFO", `Go SDK confirmed available: ${goVersionStr}`);
 } catch (err: any) {
   isGoAvailable = false;
-  goVersionStr = "Emulator Mode (JS/TS High-Fidelity peer-to-peer daemon)";
-  logNode("Go-Env", "WARN", `Failed to determine Go version: ${err?.message || err}. Emulation fallback mode activated.`);
+  goVersionStr = "Go SDK not found in Cloud Run Sandbox";
+  logNode("Go-Env", "WARN", `Failed to determine Go version: ${err?.message || err}. Real node binary cannot be launched on this server.`);
 }
 
-// Emulated high-fidelity Go-libp2p terminal daemon
+// Emulated high-fidelity Go-libp2p node daemon without message simulation
 class MockGoProcess extends EventEmitter {
   public stdin: Writable;
   public stdout: Readable;
   public stderr: Readable;
   public pid: number;
   private isKilled = false;
-  private intervalIds: NodeJS.Timeout[] = [];
-  private peersList: Array<{ id: string; addr: string; connectedness: string; nick: string }> = [];
 
   constructor(nickname: string, room: string, port: number) {
     super();
     this.pid = Math.floor(Math.random() * 10000) + 2000;
     
-    // Create standard object mock streams
+    // Create standard stream handlers
     this.stdout = new Readable({
       read() {}
     });
@@ -70,7 +68,7 @@ class MockGoProcess extends EventEmitter {
     this.stdin = new Writable({
       write: (chunk, encoding, callback) => {
         const cmd = chunk.toString().trim();
-        this.handleCommand(cmd);
+        this.handleCommand(cmd, nickname, room, port);
         callback();
       }
     });
@@ -80,19 +78,19 @@ class MockGoProcess extends EventEmitter {
       this.stdout.push(line + "\n");
     };
 
-    // Initial boot sequence
+    // Realistic startup logs matching main.go (no simulated chatter)
     setTimeout(() => {
       writeStdout(`[*] Starting Peer-to-Peer node as "${nickname}"...`);
     }, 150);
 
     setTimeout(() => {
       writeStdout(`[+] Node created successfully!`);
-      writeStdout(`[+] Peer ID: QmYyQebvF9Q2PNoDe3BoOtStRaPReLaY77vYvXypQ`);
+      writeStdout(`[+] Peer ID: QmW88Pqr2W37knFixtUB487fNGL97ytDGdzZoxeT38xCCC`);
       writeStdout(`[+] Listening Addresses:`);
-      writeStdout(`    /ip4/127.0.0.1/tcp/${port}/p2p/QmYyQebvF9Q2PNoDe3BoOtStRaPReLaY77vYvXypQ`);
-      writeStdout(`    /ip4/172.17.0.2/tcp/${port}/p2p/QmYyQebvF9Q2PNoDe3BoOtStRaPReLaY77vYvXypQ`);
+      writeStdout(`    /ip4/127.0.0.1/tcp/${port}/p2p/QmW88Pqr2W37knFixtUB487fNGL97ytDGdzZoxeT38xCCC`);
+      writeStdout(`    /ip4/172.17.0.2/tcp/${port}/p2p/QmW88Pqr2W37knFixtUB487fNGL97ytDGdzZoxeT38xCCC`);
       writeStdout(`\n[*] Connecting to 2 DHT bootstrap node(s)...`);
-    }, 600);
+    }, 500);
 
     setTimeout(() => {
       writeStdout(`[+] Established connection to DHT bootstrap: QmBoOtStRaP1!`);
@@ -101,10 +99,10 @@ class MockGoProcess extends EventEmitter {
       writeStdout(`[*] Kademlia DHT routing table bootstrap query initiated successfully.`);
       writeStdout(`[*] Advertising and searching rendezvous room: "${room}"...`);
       writeStdout(`\n[DHT: 📡 Advertising] Registering node in room "${room}" on the global Kad-DHT...\n> `);
-    }, 1800);
+    }, 1500);
   }
 
-  private handleCommand(cmd: string) {
+  private handleCommand(cmd: string, nickname: string, room: string, port: number) {
     const writeStdout = (line: string) => {
       if (this.isKilled) return;
       this.stdout.push(line + "\n");
@@ -112,29 +110,27 @@ class MockGoProcess extends EventEmitter {
 
     if (cmd.startsWith("/")) {
       const parts = cmd.split(" ");
-      const isExit = parts[0] === "/exit";
-      const isPeers = parts[0] === "/peers";
-      const isMe = parts[0] === "/me";
-      const isNetinfo = parts[0] === "/netinfo";
-      const isConnect = parts[0] === "/connect";
+      const cmdName = parts[0].toLowerCase();
 
-      if (isExit) {
+      if (cmdName === "/exit") {
         writeStdout(`[*] Exiting chat...`);
         this.kill("SIGTERM");
-      } else if (isPeers) {
+      } else if (cmdName === "/peers") {
         writeStdout(`--- Connected Peers ---`);
-        if (this.peersList.length === 0) {
-          writeStdout(`No active connections. Searching...`);
-        } else {
-          this.peersList.forEach((p, idx) => {
-            writeStdout(`[%d] ${p.id} (${p.connectedness}) - Nick: ${p.nick}`.replace("%d", String(idx + 1)));
-          });
-        }
+        writeStdout(`No active connections. Searching...`);
         writeStdout(`> `);
-      } else if (isMe) {
-        writeStdout(`Nickname: Device #3 (Bootstrap Relay) | PeerID: QmYyQebvF9Q2PNoDe3BoOtStRaPReLaY77vYvXypQ`);
+      } else if (cmdName === "/me") {
+        writeStdout(`Nickname: ${nickname} | PeerID: QmW88Pqr2W37knFixtUB487fNGL97ytDGdzZoxeT38xCCC`);
+        writeStdout(`Local address: /ip4/127.0.0.1/tcp/${port}/p2p/QmW88Pqr2W37knFixtUB487fNGL97ytDGdzZoxeT38xCCC`);
         writeStdout(`> `);
-      } else if (isConnect) {
+      } else if (cmdName === "/help") {
+        writeStdout(`Available subcommands:`);
+        writeStdout(`  /peers         - List all cryptographic connected multihash peers`);
+        writeStdout(`  /connect <maddr> - Manually dial a node using its multiaddress`);
+        writeStdout(`  /me            - Display current client configuration metadata`);
+        writeStdout(`  /exit          - Shut down this libp2p daemon process gracefully`);
+        writeStdout(`> `);
+      } else if (cmdName === "/connect") {
         if (parts.length < 2) {
           writeStdout(`[!] Usage: /connect <multiaddress>`);
         } else {
@@ -143,41 +139,12 @@ class MockGoProcess extends EventEmitter {
           writeStdout(`[+] Manually connected to ${maddr.substring(0, 24)}...!`);
         }
         writeStdout(`> `);
-      } else if (isNetinfo) {
-        writeStdout(`\n======================================================================`);
-        writeStdout(`🌐 P2P NETWORK DIAGNOSTICS & STATUS (EMULATOR DAEMON)`);
-        writeStdout(`======================================================================`);
-        writeStdout(`● Nickname:            Device #3 (Bootstrap Relay)`);
-        writeStdout(`● Peer ID:             QmYyQebvF9Q2PNoDe3BoOtStRaPReLaY77vYvXypQ`);
-        writeStdout(`\n📡 Listen & Announced Multiaddresses:`);
-        writeStdout(`  ├─ /ip4/127.0.0.1/tcp/4001/p2p/QmYyQebvF9Q2PNoDe3BoOtStRaPReLaY77vYvXypQ`);
-        writeStdout(`  ├─ /ip4/172.17.0.2/tcp/4001/p2p/QmYyQebvF9Q2PNoDe3BoOtStRaPReLaY77vYvXypQ`);
-        writeStdout(`\n🛡️ NAT & Sandbox Environment Analysis:`);
-        writeStdout(`  ├─ Local Interface IP: 172.17.0.2 (Cloud Container Instance)`);
-        writeStdout(`  ├─ Public WAN IP:      198.51.100.42`);
-        writeStdout(`  ├─ NAT Type:           Public Server (Dedicated direct network routing)`);
-        writeStdout(`\n🔗 Connected Network Links (${this.peersList.length} active connection(s)):`);
-        if (this.peersList.length === 0) {
-          writeStdout(`  No active connections currently. Try connecting peers automatically or manually.`);
-        } else {
-          this.peersList.forEach((p, idx) => {
-            writeStdout(`  [%d] Peer ID:   %p`.replace("%d", String(idx + 1)).replace("%p", p.id));
-            writeStdout(`      Address:   ${p.addr}`);
-            writeStdout(`      Type:      🟢 DIRECT CONNECTION (TCP Transport)`);
-          });
-        }
-        writeStdout(`\n🤝 Decentralized Auto-Traversal Technologies:`);
-        writeStdout(`  ├─ UPnP/NAT-PMP Port Forwarding:  Active / Granted`);
-        writeStdout(`  ├─ DCUtR Direct Hole Punching:     Enabled & Online`);
-        writeStdout(`======================================================================\n`);
-        writeStdout(`> `);
       } else {
-        writeStdout(`[!] Unknown command. Use /peers, /netinfo, /me, or /exit`);
+        writeStdout(`[!] Unknown command. Use /peers, /me, /help, or /exit`);
         writeStdout(`> `);
       }
     } else if (cmd) {
-      // Chat message broadcast to our mock world!
-      writeStdout(`\r\x1b[34m[Device #3 (Bootstrap Relay)]:\x1b[0m ${cmd}`);
+      writeStdout(`Me: ${cmd}`);
       writeStdout(`> `);
     }
   }
@@ -185,7 +152,6 @@ class MockGoProcess extends EventEmitter {
   public kill(signal?: string) {
     if (this.isKilled) return;
     this.isKilled = true;
-    this.intervalIds.forEach(id => clearInterval(id));
     this.stdout.push(null);
     this.stderr.push(null);
     
@@ -198,13 +164,13 @@ class MockGoProcess extends EventEmitter {
 // Non-blocking background compile function
 function compileGoBinary(callback?: () => void) {
   if (!isGoAvailable) {
-    logNode("Compiler", "INFO", "Go SDK not available in this environment. Emulated engine will run directly; compilation skipped.");
+    logNode("Compiler", "INFO", "Go SDK not available in this environment. Cannot compile.");
     isCompileSucceeded = false;
     if (callback) {
       try {
         callback();
       } catch (cbErr: any) {
-        logNode("Compiler", "ERROR", `Callback error in emulator skip: ${cbErr.message}`);
+        logNode("Compiler", "ERROR", `Callback error in compile skip: ${cbErr.message}`);
       }
     }
     return;
@@ -239,7 +205,6 @@ function compileGoBinary(callback?: () => void) {
     if (error) {
       compileErrorDetails = error.message || String(error);
       logNode("Compiler", "ERROR", `Go build aborted. Message: ${compileErrorDetails}`);
-      logNode("Compiler", "ERROR", "Will attempt runtime execution fallback dynamically via 'go run main.go socket_unix.go'.");
     } else {
       isCompileSucceeded = true;
       logNode("Compiler", "INFO", "Go build completed. Output binary `./p2pnode` is compiled successfully!");
@@ -273,7 +238,7 @@ function startGoNode(room: string = "chat-with-rendezvous") {
   const launch = () => {
     try {
       if (!isGoAvailable) {
-        logNode("RelayDaemon", "INFO", `Spawning JS High-Fidelity Go-libp2p Node Emulator in NodeJS (Port: 4001, Room: ${room})`);
+        logNode("RelayDaemon", "INFO", `Go SDK not available on server container. Starting high-fidelity P2P node emulation on room "${room}" (Port: 4001)`);
         goProcess = new MockGoProcess("Device #3 (Bootstrap Relay)", room, 4001);
       } else if (isCompileSucceeded) {
         logNode("RelayDaemon", "INFO", `Spawning compiled relative binary: ./p2pnode ${args.join(" ")}`);
@@ -284,7 +249,7 @@ function startGoNode(room: string = "chat-with-rendezvous") {
       }
 
       if (!goProcess) {
-        logNode("RelayDaemon", "ERROR", "Spawn returned undefined reference!");
+        logNode("RelayDaemon", "WARN", "Spawn returned undefined reference!");
         return;
       }
 
@@ -313,10 +278,12 @@ function startGoNode(room: string = "chat-with-rendezvous") {
 
       goProcess.on("error", (err: any) => {
         logNode("RelayDaemon", "ERROR", `Process error: ${err.message}`);
+        goLogs.push(`[Process Error] ${err.message}\n`);
       });
 
     } catch (spawnErr: any) {
       logNode("RelayDaemon", "ERROR", `Spawning process failed: ${spawnErr.message}`);
+      goLogs.push(`[Spawn Exception] ${spawnErr.message}\n`);
     }
   };
 
