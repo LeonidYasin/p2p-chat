@@ -10,17 +10,30 @@ app.use(express.json());
 
 let goProcess: ChildProcess | null = null;
 let goLogs: string[] = [];
+let isCompiling = false;
 let isCompileSucceeded = false;
 
-// Compile the Go binary during server startup
-try {
-  console.log("[Go Compiler] Building Go P2P Node binary...");
-  // Use go build which respects socket_unix.go and ignores socket_windows.go on Linux Container
-  execSync("go build -o p2pnode .", { stdio: "inherit" });
-  console.log("[Go Compiler] Compilation complete: ./p2pnode created");
-  isCompileSucceeded = true;
-} catch (error) {
-  console.error("[Go Compiler] Compilation failed. Will attempt to run using 'go run main.go socket_unix.go'. Error:", error);
+// Non-blocking compile function
+function compileGoBinary(callback?: () => void) {
+  if (isCompiling || isCompileSucceeded) {
+    if (callback) callback();
+    return;
+  }
+  isCompiling = true;
+  console.log("[Go Compiler] Background compilation started: `go build -o p2pnode .`...");
+  const { exec } = require("child_process");
+  exec("go build -o p2pnode .", (error: any, stdout: string, stderr: string) => {
+    isCompiling = false;
+    if (error) {
+      console.error("[Go Compiler] Background compilation failed. Will run with 'go run'. Error:", error);
+    } else {
+      console.log("[Go Compiler] Background compilation succeeded: ./p2pnode generated!");
+      isCompileSucceeded = true;
+    }
+    if (callback) {
+      callback();
+    }
+  });
 }
 
 function startGoNode(room: string = "chat-with-rendezvous") {
@@ -33,34 +46,44 @@ function startGoNode(room: string = "chat-with-rendezvous") {
   goLogs = [];
   const args = ["-port", "4001", "-nick", "Device #3 (Bootstrap Relay)", "-room", room];
   
-  if (isCompileSucceeded) {
-    console.log("[Go Daemon] Spawning compiled P2P binary `./p2pnode` with args:", args);
-    goProcess = spawn("./p2pnode", args);
+  const launch = () => {
+    if (isCompileSucceeded) {
+      console.log("[Go Daemon] Spawning compiled P2P binary `./p2pnode` with args:", args);
+      goProcess = spawn("./p2pnode", args);
+    } else {
+      console.log("[Go Daemon] Spawning P2P node via `go run` with args:", args);
+      goProcess = spawn("go", ["run", "main.go", "socket_unix.go", ...args]);
+    }
+
+    // Capture stdout and feed log events array
+    goProcess.stdout?.on("data", (data) => {
+      const chunk = data.toString();
+      console.log("[Go stdout]", chunk.trim());
+      goLogs.push(chunk);
+    });
+
+    // Capture stderr
+    goProcess.stderr?.on("data", (data) => {
+      const chunk = data.toString();
+      console.error("[Go stderr]", chunk.trim());
+      goLogs.push(chunk);
+    });
+
+    goProcess.on("close", (code) => {
+      const closedLine = `\n[*] Daemon process exited with code ${code}\n`;
+      console.log("[Go Daemon]", closedLine.trim());
+      goLogs.push(closedLine);
+      goProcess = null;
+    });
+  };
+
+  if (isCompileSucceeded || isCompiling) {
+    launch();
   } else {
-    console.log("[Go Daemon] Spawning P2P node via `go run` with args:", args);
-    goProcess = spawn("go", ["run", "main.go", "socket_unix.go", ...args]);
+    compileGoBinary(() => {
+      launch();
+    });
   }
-
-  // Capture stdout and feed log events array
-  goProcess.stdout?.on("data", (data) => {
-    const chunk = data.toString();
-    console.log("[Go stdout]", chunk.trim());
-    goLogs.push(chunk);
-  });
-
-  // Capture stderr
-  goProcess.stderr?.on("data", (data) => {
-    const chunk = data.toString();
-    console.error("[Go stderr]", chunk.trim());
-    goLogs.push(chunk);
-  });
-
-  goProcess.on("close", (code) => {
-    const closedLine = `\n[*] Daemon process exited with code ${code}\n`;
-    console.log("[Go Daemon]", closedLine.trim());
-    goLogs.push(closedLine);
-    goProcess = null;
-  });
 }
 
 // API Routes for Relay controls
