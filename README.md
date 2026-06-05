@@ -42,7 +42,7 @@ If you have Git and Go installed on your Windows machine:
    ```
 3. Build the executable binary:
    ```bash
-   go build -o p2pchat.exe main.go
+   go build -o p2pchat.exe
    ```
 4. Run the node (e.g. on port `3001` with nickname `WinUser`):
    ```bash
@@ -53,7 +53,7 @@ If you have Git and Go installed on your Windows machine:
 You can compile the Windows `.exe` binary directly from your Termux (or any other machine) using Golang’s built-in cross-compilation, then send the `.exe` to your PC:
 1. In Termux, run:
    ```bash
-   GOOS=windows GOARCH=amd64 go build -o p2pchat.exe main.go
+   GOOS=windows GOARCH=amd64 go build -o p2pchat.exe
    ```
 2. Transfer `p2pchat.exe` to your Windows PC (via Telegram, cloud, or USB).
 3. Open Windows PowerShell in the folder where the file is saved and launch it:
@@ -93,7 +93,7 @@ cd p2p-chat
 go mod tidy
 
 # Build the executable
-go build -o p2pchat main.go
+go build -o p2pchat
 ```
 
 ### 4. Run the Node

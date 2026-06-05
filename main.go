@@ -130,19 +130,20 @@ func main() {
 		
 		// Launch background advertiser loop that waits for connection first
 		go func() {
-			// First, wait for at least one connection to establish (e.g. bootstrap nodes)
+			// First, wait for at least one connection or routing table entry to establish
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				default:
-					if len(h.Network().Conns()) > 0 {
-						break
+					if len(h.Network().Conns()) > 0 || kademliaDHT.RoutingTable().Size() > 0 {
+						goto StartAdvertising
 					}
 					time.Sleep(1 * time.Second)
 				}
 			}
 			
+StartAdvertising:
 			// Periodically advertise presence to the global DHT routing table
 			ticker := time.NewTicker(45 * time.Second)
 			defer ticker.Stop()
@@ -156,7 +157,7 @@ func main() {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if len(h.Network().Conns()) > 0 {
+					if len(h.Network().Conns()) > 0 || kademliaDHT.RoutingTable().Size() > 0 {
 						discoveryutil.Advertise(ctx, routingDiscovery, config.RendezvousString)
 					}
 				}
@@ -164,7 +165,7 @@ func main() {
 		}()
 
 		// Continuously search for other peers in background
-		go discoveryLoop(ctx, h, routingDiscovery, config.RendezvousString, config.Nickname)
+		go discoveryLoop(ctx, h, kademliaDHT, routingDiscovery, config.RendezvousString, config.Nickname, config.BootstrapPeers)
 	}
 
 	// 6. Spawn Interactive Console UI
@@ -461,6 +462,23 @@ func bootstrapConnect(ctx context.Context, h host.Host, bootstrapPeers []string)
 	}()
 }
 
+// bootstrapConnectQuiet seamlessly and quietly attempts to dial DHT bootstrap nodes to restore routing health
+func bootstrapConnectQuiet(ctx context.Context, h host.Host, bootstrapPeers []string) {
+	for _, peerAddrRaw := range bootstrapPeers {
+		addr, err := multiaddr.NewMultiaddr(peerAddrRaw)
+		if err != nil {
+			continue
+		}
+		peerinfo, err := peer.AddrInfoFromP2pAddr(addr)
+		if err != nil {
+			continue
+		}
+		go func(info *peer.AddrInfo) {
+			_ = h.Connect(ctx, *info)
+		}(peerinfo)
+	}
+}
+
 // Setup local mDNS peer discovery handler
 type discoveryNotifee struct {
 	h host.Host
@@ -479,7 +497,7 @@ func setupMDNS(h host.Host, serviceTag string, callback func(peer.AddrInfo)) {
 }
 
 // Periodically search for new peers via the Rendezvous string
-func discoveryLoop(ctx context.Context, h host.Host, routingDiscovery *discoveryrouting.RoutingDiscovery, rendezvous string, nickname string) {
+func discoveryLoop(ctx context.Context, h host.Host, kademliaDHT *dht.IpfsDHT, routingDiscovery *discoveryrouting.RoutingDiscovery, rendezvous string, nickname string, bootstrapPeers []string) {
 	// Let bootstrapping start first for 3 seconds before querying DHT
 	time.Sleep(3 * time.Second)
 
@@ -488,12 +506,15 @@ func discoveryLoop(ctx context.Context, h host.Host, routingDiscovery *discovery
 
 	runSearch := func() {
 		conns := len(h.Network().Conns())
-		if conns == 0 {
-			fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Peer connections: 0 (No active routing links to crawl. Waiting for DHT bootstrap...)\n> ", rendezvous)
+		rtSize := kademliaDHT.RoutingTable().Size()
+
+		if conns == 0 && rtSize == 0 {
+			fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Peer connections: 0, RT size: 0. Rebootstrapping quietly to rebuild DHT table...\n> ", rendezvous)
+			bootstrapConnectQuiet(ctx, h, bootstrapPeers)
 			return
 		}
 
-		fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Live network links: %d. Actively crawling Kad-DHT indices...\n> ", rendezvous, conns)
+		fmt.Printf("\n[Search: 📡 Querying DHT] Room: \"%s\" | Live network links: %d | RT size: %d. Actively crawling Kad-DHT indices...\n> ", rendezvous, conns, rtSize)
 		peerChan, err := routingDiscovery.FindPeers(ctx, rendezvous)
 		if err != nil {
 			fmt.Printf("\n[Search: ⚠️ Error] Failed to initiate DHT search: %v\n> ", err)
